@@ -3,67 +3,68 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GlobalLogic AI RAG Chat QA Test UI</title>
+    <title>GlobalLogic AI Voice & RAG Avatar Chat</title>
     <!-- HTMX CDN -->
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
-    <!-- Google Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <!-- Bootstrap Icons -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
-    
+    <!-- Google Fonts (Inter + Noto Sans JP) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+
     <style>
         :root {
-            --bg-color: #0f172a;
-            --card-bg: rgba(30, 41, 59, 0.7);
-            --card-border: rgba(255, 255, 255, 0.1);
+            --bg-gradient: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%);
+            --panel-bg: rgba(30, 41, 59, 0.7);
+            --panel-border: rgba(255, 255, 255, 0.1);
             --primary-orange: #ff5f2d;
-            --primary-orange-hover: #ff764a;
+            --primary-orange-hover: #ff784d;
+            --user-bubble-bg: linear-gradient(135deg, #3b82f6, #2563eb);
+            --ai-bubble-bg: rgba(30, 41, 59, 0.85);
+            --ai-bubble-border: rgba(139, 92, 246, 0.3);
             --text-main: #f8fafc;
             --text-sub: #94a3b8;
-            --user-bubble: #1e293b;
-            --ai-bubble: #1e1b4b;
-            --badge-bg: rgba(255, 95, 45, 0.15);
         }
 
         * {
             box-sizing: border-box;
             margin: 0;
             padding: 0;
-            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            font-family: 'Inter', 'Noto Sans JP', sans-serif;
         }
 
         body {
-            background: radial-gradient(circle at top right, #1e1b4b 0%, #0f172a 50%, #020617 100%);
+            background: var(--bg-gradient);
             color: var(--text-main);
-            min-height: 100vh;
+            height: 100vh;
             display: flex;
-            flex-direction: column;
-            align-items: center;
             justify-content: center;
-            padding: 20px;
-        }
-
-        .container {
-            width: 100%;
-            max-width: 900px;
-            height: 90vh;
-            background: var(--card-bg);
-            backdrop-filter: blur(16px);
-            -webkit-backdrop-filter: blur(16px);
-            border: 1px solid var(--card-border);
-            border-radius: 24px;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-            display: flex;
-            flex-direction: column;
+            align-items: center;
             overflow: hidden;
         }
 
-        header {
-            padding: 18px 24px;
+        .chat-container {
+            width: 100%;
+            max-width: 900px;
+            height: 92vh;
+            background: var(--panel-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--panel-border);
+            border-radius: 24px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* ヘッダー */
+        .chat-header {
+            padding: 16px 24px;
             background: rgba(15, 23, 42, 0.6);
-            border-bottom: 1px solid var(--card-border);
+            border-bottom: 1px solid var(--panel-border);
             display: flex;
             align-items: center;
             justify-content: space-between;
@@ -76,7 +77,7 @@
         }
 
         .logo-badge {
-            background: linear-gradient(135deg, #ff5f2d, #ff8052);
+            background: var(--primary-orange);
             color: white;
             padding: 6px 12px;
             border-radius: 10px;
@@ -149,6 +150,7 @@
             border-radius: 3px;
         }
 
+        /* メッセージ行 */
         .message-row {
             display: flex;
             gap: 14px;
@@ -167,7 +169,7 @@
         .avatar {
             width: 38px;
             height: 38px;
-            border-radius: 50%;
+            border-radius: 12px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -175,93 +177,99 @@
             flex-shrink: 0;
         }
 
-        .user .avatar {
+        .message-row.user .avatar {
             background: linear-gradient(135deg, #3b82f6, #1d4ed8);
             color: white;
         }
 
-        .ai .avatar {
-            background: linear-gradient(135deg, #ff5f2d, #c2410c);
+        .message-row.ai .avatar {
+            background: linear-gradient(135deg, #ff5f2d, #d93800);
             color: white;
+            box-shadow: 0 4px 12px rgba(255, 95, 45, 0.4);
         }
 
         .bubble {
-            padding: 16px 20px;
-            border-radius: 20px;
-            font-size: 15px;
+            padding: 14px 18px;
+            border-radius: 18px;
+            font-size: 14.5px;
             line-height: 1.6;
             position: relative;
+            word-wrap: break-word;
         }
 
-        .user .bubble {
-            background: var(--user-bubble);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            border-top-right-radius: 4px;
+        .message-row.user .bubble {
+            background: var(--user-bubble-bg);
+            color: white;
+            border-bottom-right-radius: 4px;
+            box-shadow: 0 4px 14px rgba(37, 99, 235, 0.3);
+        }
+
+        .message-row.ai .bubble {
+            background: var(--ai-bubble-bg);
+            border: 1px solid var(--ai-bubble-border);
             color: #f1f5f9;
-        }
-
-        .ai .bubble {
-            background: var(--ai-bubble);
-            border: 1px solid rgba(99, 102, 241, 0.3);
-            border-top-left-radius: 4px;
-            color: #f8fafc;
+            border-bottom-left-radius: 4px;
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
         }
 
+        .answer-text {
+            white-space: pre-wrap;
+        }
+
+        /* 検索結果メタ情報 */
         .qa-meta {
             margin-top: 12px;
             padding-top: 10px;
             border-top: 1px solid rgba(255, 255, 255, 0.1);
-            font-size: 12px;
-            color: var(--text-sub);
             display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
             align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            font-size: 12px;
         }
 
         .tag {
-            background: var(--badge-bg);
+            background: rgba(255, 95, 45, 0.15);
             color: #ff8052;
-            padding: 3px 8px;
+            border: 1px solid rgba(255, 95, 45, 0.3);
+            padding: 2px 8px;
             border-radius: 6px;
             font-weight: 500;
-            font-size: 11px;
         }
 
         .score-tag {
             background: rgba(16, 185, 129, 0.15);
             color: #34d399;
-            padding: 3px 8px;
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            padding: 2px 8px;
             border-radius: 6px;
             font-weight: 500;
-            font-size: 11px;
         }
 
-        /* コントロールエリア */
-        .input-area {
-            padding: 20px 24px;
+        /* 入力エリア */
+        .input-container {
+            padding: 16px 24px 20px;
             background: rgba(15, 23, 42, 0.8);
-            border-top: 1px solid var(--card-border);
+            border-top: 1px solid var(--panel-border);
         }
 
         .input-form {
             display: flex;
+            gap: 10px;
             align-items: center;
-            gap: 12px;
-            background: rgba(30, 41, 59, 0.8);
+            background: rgba(30, 41, 59, 0.9);
             border: 1px solid rgba(255, 255, 255, 0.15);
             border-radius: 16px;
-            padding: 8px 12px 8px 20px;
+            padding: 6px 8px 6px 16px;
             transition: all 0.2s ease;
         }
 
         .input-form:focus-within {
             border-color: var(--primary-orange);
-            box-shadow: 0 0 0 3px rgba(255, 95, 45, 0.2);
+            box-shadow: 0 0 0 3px rgba(255, 95, 45, 0.25);
         }
 
-        .chat-input {
+        .input-field {
             flex: 1;
             background: transparent;
             border: none;
@@ -270,8 +278,8 @@
             font-size: 15px;
         }
 
-        .chat-input::placeholder {
-            color: #64748b;
+        .input-field::placeholder {
+            color: var(--text-sub);
         }
 
         .btn-icon {
@@ -279,7 +287,6 @@
             height: 42px;
             border-radius: 12px;
             border: none;
-            outline: none;
             cursor: pointer;
             display: flex;
             align-items: center;
@@ -289,14 +296,12 @@
         }
 
         .btn-mic {
-            background: rgba(255, 255, 255, 0.05);
-            color: #94a3b8;
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--text-main);
         }
 
         .btn-mic:hover {
-            background: rgba(255, 255, 255, 0.1);
-            color: #f1f5f9;
+            background: rgba(255, 255, 255, 0.15);
         }
 
         .btn-mic.recording {
@@ -348,104 +353,71 @@
             display: flex;
         }
 
-        .typing-dots {
-            display: flex;
+        .interrupted-badge {
+            display: inline-flex;
+            align-items: center;
             gap: 4px;
-            padding: 8px 12px;
-        }
-
-        .typing-dots span {
-            width: 8px;
-            height: 8px;
-            background: #a5b4fc;
-            border-radius: 50%;
-            animation: blink 1.4s infinite ease-in-out both;
-        }
-
-        .typing-dots span:nth-child(1) { animation-delay: -0.32s; }
-        .typing-dots span:nth-child(2) { animation-delay: -0.16s; }
-
-        @keyframes blink {
-            0%, 80%, 100% { transform: scale(0); }
-            40% { transform: scale(1); }
+            font-size: 11px;
+            color: #fca5a5;
+            background: rgba(239, 68, 68, 0.2);
+            padding: 2px 8px;
+            border-radius: 4px;
+            margin-top: 6px;
         }
     </style>
 </head>
 <body>
 
-    <div class="container">
+    <div class="chat-container">
         <!-- ヘッダー -->
-        <header>
+        <div class="chat-header">
             <div class="header-title">
-                <span class="logo-badge">GlobalLogic</span>
+                <div class="logo-badge">GlobalLogic</div>
                 <h1>AI Voice & RAG Multi-turn Chat</h1>
             </div>
             <div class="header-right">
-                <!-- セッション初期化ボタン -->
-                <button type="button" class="btn-header btn-reset-session" onclick="triggerResetSession(true)" title="対話セッションと会話履歴を終了・初期化">
+                <button class="btn-header btn-reset-session" onclick="triggerResetSession()" title="会話履歴を全リセット">
                     <i class="bi bi-trash3-fill"></i> セッション初期化
                 </button>
-                <!-- DB再読み込みボタン -->
-                <button type="button" class="btn-header" onclick="triggerReindex()" title="globallogic_qa.jsonの変更をDBへ再取り込み">
+                <button class="btn-header" onclick="triggerReindex()" title="QAデータを再読み込み">
                     <i class="bi bi-arrow-clockwise"></i> DB再読み込み
                 </button>
             </div>
-        </header>
+        </div>
 
-        <!-- チャット履歴エリア -->
+        <!-- チャットログ -->
         <div class="chat-box" id="chat-box">
-            <!-- 初期挨拶メッセージ -->
             <div class="message-row ai">
                 <div class="avatar"><i class="bi bi-robot"></i></div>
                 <div class="bubble">
                     こんにちは！GlobalLogic Japan AI アシスタントです。<br>
                     前の質問の文脈を引き継いで会話が可能です。お気軽にご質問ください。<br>
-                    <span style="font-size: 12px; color: #a5b4fc; margin-top: 4px; display: inline-block;">
-                        ※ 3分間操作がない場合、セッションは「ご利用ありがとうございました。」と自動終了されます。
-                    </span>
+                    <span style="font-size: 12px; color: var(--text-sub);">※ 3分無操作がない場合、セッションは「ご利用ありがとうございました。」と自動終了されます。</span>
                 </div>
             </div>
         </div>
 
-        <!-- ローディングインジケータ -->
-        <div id="loading-indicator" class="htmx-indicator" style="padding: 0 24px 12px 24px;">
-            <div class="message-row ai">
-                <div class="avatar"><i class="bi bi-robot"></i></div>
-                <div class="bubble">
-                    <div class="typing-dots">
-                        <span></span><span></span><span></span>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- コントロール・入力フォーム -->
-        <div class="input-area">
-            <form id="chat-form"
-                  hx-post="/api/chat-ui"
-                  hx-target="#chat-box"
+        <!-- 入力フォーム -->
+        <div class="input-container">
+            <form id="chat-form" 
+                  hx-post="/api/chat-ui" 
+                  hx-target="#chat-box" 
                   hx-swap="beforeend"
-                  hx-indicator="#loading-indicator"
-                  class="input-form">
-                
-                <input type="text"
-                       name="query"
-                       id="query-input"
-                       class="chat-input"
-                       placeholder="質問を入力するか、マイクボタンを押して喋ってください..."
-                       required
+                  class="input-form"
+                  on-submit="stopSpeechSynthesis('user_submit')">
+
+                <input type="text" 
+                       id="query-input" 
+                       name="query" 
+                       class="input-field" 
+                       placeholder="質問を入力するか、マイクボタンを押して喋ってください..." 
+                       required 
                        autocomplete="off">
 
-                <!-- 音声入力マイクボタン -->
-                <button type="button"
-                        id="mic-btn"
-                        class="btn-icon btn-mic"
-                        title="音声入力（マイク）"
-                        onclick="toggleSpeechRecognition()">
+                <button type="button" id="mic-btn" class="btn-icon btn-mic" onclick="toggleSpeechRecognition()" title="音声入力 / 発話中断">
                     <i class="bi bi-mic-fill"></i>
                 </button>
 
-                <!-- 送信ボタン -->
                 <button type="submit" class="btn-icon btn-send" title="送信">
                     <i class="bi bi-send-fill"></i>
                 </button>
@@ -473,8 +445,17 @@
             }, THREE_MINUTES_MS);
         }
 
+        // 🛑 インタラプション (発話中断) 処理
+        function stopSpeechSynthesis(reason = "user_interruption") {
+            if ('speechSynthesis' in window && window.speechSynthesis.speaking) {
+                console.log(`[Interruption] Speech Synthesis interrupted. Reason: ${reason}`);
+                window.speechSynthesis.cancel();
+            }
+        }
+
         // セッション初期化処理
         async function triggerResetSession(manual = true, customMsg = null) {
+            stopSpeechSynthesis("session_reset");
             if (idleTimer) clearTimeout(idleTimer);
 
             try {
@@ -504,6 +485,7 @@
 
         // DB再読み込み (POST /api/reindex)
         async function triggerReindex() {
+            stopSpeechSynthesis("reindex");
             const btn = document.querySelector('.btn-header:not(.btn-reset-session)');
             btn.innerHTML = '<i class="bi bi-arrow-clockwise spin"></i> 処理中...';
             btn.disabled = true;
@@ -533,10 +515,10 @@
 
         // 音声合成 (TTS)
         function speakText(text) {
+            stopSpeechSynthesis("new_speak");
             const ttsEnabled = document.getElementById('tts-enabled').checked;
             if (!ttsEnabled || !('speechSynthesis' in window)) return;
 
-            window.speechSynthesis.cancel();
             const cleanText = text.replace(/<[^>]*>?/gm, '');
             const utterance = new SpeechSynthesisUtterance(cleanText);
             utterance.lang = 'ja-JP';
@@ -544,6 +526,11 @@
             utterance.pitch = 1.0;
             window.speechSynthesis.speak(utterance);
         }
+
+        // HTMX イベントリスナー：リクエスト送信開始時に前回の読み上げをストップ
+        document.body.addEventListener('htmx:beforeRequest', function(evt) {
+            stopSpeechSynthesis("htmx_submit");
+        });
 
         // HTMX イベントリスナー：レスポンス受信後処理
         document.body.addEventListener('htmx:afterOnLoad', function(evt) {
@@ -559,7 +546,6 @@
                     speakText(lastAiBubble.innerText);
                 }
 
-                // 入力があったため 3 分タイマーをリセット開始
                 resetIdleTimer();
             }
         });
@@ -567,7 +553,7 @@
         // 初期タイマーの起動
         resetIdleTimer();
 
-        // Web Speech API (音声入力)
+        // Web Speech API (音声入力 & インタラプション)
         let recognition = null;
         let isRecording = false;
 
@@ -580,6 +566,9 @@
 
             recognition.onstart = function() {
                 isRecording = true;
+                // 🛑 マイク入力（発話開始）された瞬間にAIの説明・読み上げを即座にストップ
+                stopSpeechSynthesis("mic_start_interruption");
+
                 const micBtn = document.getElementById('mic-btn');
                 micBtn.classList.add('recording');
                 micBtn.innerHTML = '<i class="bi bi-stop-fill"></i>';
@@ -607,6 +596,9 @@
         }
 
         function toggleSpeechRecognition() {
+            // 音声ボタンが押された瞬間に、AIの回答再生を即座にストップ（インタラプション）
+            stopSpeechSynthesis("mic_button_clicked");
+
             if (!recognition) return;
             if (isRecording) {
                 recognition.stop();
@@ -618,8 +610,10 @@
         function stopRecording() {
             isRecording = false;
             const micBtn = document.getElementById('mic-btn');
-            micBtn.classList.remove('recording');
-            micBtn.innerHTML = '<i class="bi bi-mic-fill"></i>';
+            if (micBtn) {
+                micBtn.classList.remove('recording');
+                micBtn.innerHTML = '<i class="bi bi-mic-fill"></i>';
+            }
         }
     </script>
 </body>
