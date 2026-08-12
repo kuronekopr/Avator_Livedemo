@@ -1,5 +1,6 @@
 import json
 import os
+import time
 import logging
 from typing import List, Dict, Any, Optional
 import chromadb
@@ -64,27 +65,64 @@ class RAGEngine:
         self.ruri_ef: Optional[RuriEmbeddingFunction] = None
         self.chroma_client: Optional[chromadb.Client] = None
         
-        # Gemini API の初期化
+        # セッション会話履歴の保持構造
+        self.sessions: Dict[str, Dict[str, Any]] = {}
+        self.SESSION_TIMEOUT_SECONDS = 180  # 3分無操作で自動初期化
+
+        # Gemini API LLM の初期化
         self.gemini_model = None
         self.init_gemini_llm()
 
         self.reload_and_reindex()
 
     def init_gemini_llm(self):
-        """.env や環境変数に GEMINI_API_KEY が定義されている場合、Gemini API を初期化"""
+        """Gemini API LLM の初期化 (gemini-2.0-flash / gemini-1.5-flash サポート)"""
         api_key = settings.GEMINI_API_KEY or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         if api_key and api_key.strip():
             try:
                 import google.generativeai as genai
                 genai.configure(api_key=api_key.strip())
-                self.gemini_model = genai.GenerativeModel("gemini-1.5-flash")
-                logger.info("Gemini API LLM successfully configured from .env file.")
+                # 利用可能な最新の Flash モデルを選択
+                for model_candidate in ["gemini-2.0-flash", "gemini-1.5-flash-latest", "gemini-1.5-flash", "gemini-pro"]:
+                    try:
+                        self.gemini_model = genai.GenerativeModel(model_candidate)
+                        logger.info(f"Gemini API LLM ({model_candidate}) successfully configured from .env file.")
+                        break
+                    except Exception:
+                        continue
             except Exception as e:
                 logger.warning(f"Failed to initialize Gemini API LLM: {e}")
                 self.gemini_model = None
         else:
             self.gemini_model = None
             logger.info("No GEMINI_API_KEY found in .env. Intelligent RAG context formatter will be used as fallback.")
+
+    def reset_session(self, session_id: str) -> Dict[str, Any]:
+        """指定されたセッションIDの会話履歴を初期化"""
+        if session_id in self.sessions:
+            del self.sessions[session_id]
+        logger.info(f"[SessionManager] Session '{session_id}' has been reset.")
+        return {
+            "status": "success",
+            "session_id": session_id,
+            "message": "ご利用ありがとうございました。セッションを終了・初期化しました。"
+        }
+
+    def _get_or_clean_session(self, session_id: str) -> List[Dict[str, str]]:
+        """セッションの取得および 3 分無操作タイムアウト判定・初期化"""
+        now = time.time()
+        if session_id in self.sessions:
+            last_active = self.sessions[session_id].get("last_active", now)
+            if now - last_active > self.SESSION_TIMEOUT_SECONDS:
+                logger.info(f"[SessionManager] Session '{session_id}' timed out after 3 minutes of inactivity. Resetting...")
+                self.reset_session(session_id)
+                self.sessions[session_id] = {"history": [], "last_active": now}
+            else:
+                self.sessions[session_id]["last_active"] = now
+        else:
+            self.sessions[session_id] = {"history": [], "last_active": now}
+
+        return self.sessions[session_id]["history"]
 
     def check_and_auto_reload(self):
         """ファイルの更新日時をチェックし、変更されていれば自動再ロード"""
@@ -95,13 +133,10 @@ class RAGEngine:
                 self.reload_and_reindex()
 
     def reload_and_reindex(self) -> Dict[str, Any]:
-        """
-        globallogic_qa.json を再読み込みし、Vector DB (ruri-v3 ChromaDB) を初期化・再インデックスする
-        """
+        """globallogic_qa.json を再読み込みし Vector DB を初期化"""
         if not os.path.exists(self.qa_json_path):
             raise FileNotFoundError(f"QA data file not found at: {self.qa_json_path}")
         
-        # .env の再読み込みチェック
         self.init_gemini_llm()
 
         with open(self.qa_json_path, "r", encoding="utf-8") as f:
@@ -161,9 +196,7 @@ class RAGEngine:
         }
 
     def search_knowledge_base(self, query: str, top_k: int = 3) -> List[Dict[str, Any]]:
-        """
-        ruri-v3 ベクトルデータベースによるコサイン類似度検索
-        """
+        """ruri-v3 ベクトルデータベースによるコサイン類似度検索"""
         self.check_and_auto_reload()
 
         if not query or not query.strip():
@@ -189,9 +222,9 @@ class RAGEngine:
 
         return formatted_results
 
-    def generate_rag_response(self, query: str, top_k: int = 3) -> Dict[str, Any]:
+    def generate_rag_response(self, query: str, session_id: str = "default_session", top_k: int = 3) -> Dict[str, Any]:
         """
-        RAG (Retrieval-Augmented Generation) 検索と LLM による自然な対話応答文の生成
+        マルチターン会話履歴を引き継いだ RAG (検索＋生成) 対話応答処理
         """
         clean_q = query.strip()
         if not clean_q:
@@ -200,12 +233,27 @@ class RAGEngine:
                 "search_results": []
             }
 
-        greeting_keywords = ["あなたは何", "何ができる", "自己紹介", "だれ", "誰", "説明して", "何について", "教えてくれるの"]
-        is_greeting_or_intro = any(k in clean_q for k in greeting_keywords) and len(clean_q) < 20
+        # 1. 会話履歴の取得と 3 分無操作チェック
+        history = self._get_or_clean_session(session_id)
 
-        search_results = self.search_knowledge_base(query=clean_q, top_k=top_k)
+        # 文脈補正クエリ
+        expanded_query = clean_q
+        if history and len(clean_q) <= 10:
+            last_user_q = next((h["content"] for h in reversed(history) if h["role"] == "user"), "")
+            if last_user_q:
+                expanded_query = f"{last_user_q} {clean_q}"
 
-        # .env に Gemini API Key が設定されている場合
+        # 2. Vector DB からの知識検索
+        search_results = self.search_knowledge_base(query=expanded_query, top_k=top_k)
+
+        # 3. 会話履歴テキストのフォーマット
+        recent_history = history[-8:] if len(history) > 8 else history
+        history_str = "\n".join([
+            f"{'ユーザー' if h['role']=='user' else 'AIアシスタント'}: {h['content']}"
+            for h in recent_history
+        ]) if recent_history else "（これまでの会話はありません）"
+
+        # 4. LLM 生成処理 (Gemini API が有効な場合)
         if self.gemini_model:
             try:
                 context_str = "\n\n".join([
@@ -214,37 +262,45 @@ class RAGEngine:
                 ])
 
                 system_prompt = f"""あなたは GlobalLogic Japan の公式AIアバターアシスタントです。
-ユーザーからの質問に対して、以下の【参照ナレッジ】の情報を基に、親しみやすく丁寧で自然な会話文で答えてください。
+これまでの【過去の会話履歴】と【参照ナレッジ】を踏まえ、ユーザーの最新の質問に親しみやすく丁寧で自然に答えてください。
 
 【注意事項】
-- ユーザーの質問に直接答える会話文を作成してください。単にナレッジの文章をコピペせず、文脈に合った自然な応答に組み立ててください。
-- ユーザーが「あなたは何を説明できるの？」「何ができるの？」と聞いた場合は、GlobalLogic Japanの会社概要、サービス（デジタルエンジニアリング、AI/VelocityAI、IT/OTトランスフォーメーション等）をご案内できる旨を親切に回答してください。
-- 事例や具体的な質問には、参照ナレッジ内の適切な回答を要約・引用して分かりやすく説明してください。
+- 直前の会話履歴を踏まえ、「その会社」「それ」などの指示語がある場合は直前の文脈を理解して的確に回答してください。
+- 参照ナレッジの情報を優先して正確に説明してください。
+- 「あなたは何を説明できるの？」といった挨拶・自己紹介には、GlobalLogic Japanの概要やサービスを案内してください。
+
+【過去の会話履歴】
+{history_str}
 
 【参照ナレッジ】
 {context_str}
 
-【ユーザーの質問】
+【ユーザーの最新の質問】
 {clean_q}
 
 【回答文】"""
 
                 response = self.gemini_model.generate_content(system_prompt)
                 if response and response.text:
+                    generated_text = response.text.strip()
+                    history.append({"role": "user", "content": clean_q})
+                    history.append({"role": "assistant", "content": generated_text})
                     return {
-                        "generated_text": response.text.strip(),
+                        "generated_text": generated_text,
                         "search_results": search_results
                     }
             except Exception as e:
                 logger.error(f"Gemini generation error: {e}")
 
-        # フォールバック (APIキー未設定時)
-        if is_greeting_or_intro:
+        # 5. フォールバック対話生成 (Gemini 未設定またはエラー時)
+        greeting_keywords = ["あなたは何", "何ができる", "自己紹介", "だれ", "誰", "説明して", "何について", "教えてくれるの"]
+        is_greeting = any(k in clean_q for k in greeting_keywords) and len(clean_q) < 20
+
+        if is_greeting:
             generated_text = (
                 "私は GlobalLogic Japan の AI 公式アシスタントです！"
                 "弊社の会社概要をはじめ、デジタルエンジニアリング、AI（VelocityAI）、ソフトウェア開発、"
                 "IT/OTトランスフォーメーション、ならびに各種導入事例や強みについて分かりやすくお答えいたします。"
-                "どのようなことでもお気軽にご質問ください。"
             )
         elif search_results:
             top = search_results[0]
@@ -255,7 +311,10 @@ class RAGEngine:
             else:
                 generated_text = f"ご質問の「{top['question']}」についてお答えいたします。\n\n{top['answer']}"
         else:
-            generated_text = "申し訳ありません。ご質問に関する該当情報が見つかりませんでした。キーワードを変えて再度お尋ねください。"
+            generated_text = "申し訳ありません。該当する情報が見つかりませんでした。別のキーワードでお尋ねください。"
+
+        history.append({"role": "user", "content": clean_q})
+        history.append({"role": "assistant", "content": generated_text})
 
         return {
             "generated_text": generated_text,

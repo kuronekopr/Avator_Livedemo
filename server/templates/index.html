@@ -61,7 +61,7 @@
         }
 
         header {
-            padding: 20px 28px;
+            padding: 18px 24px;
             background: rgba(15, 23, 42, 0.6);
             border-bottom: 1px solid var(--card-border);
             display: flex;
@@ -78,42 +78,26 @@
         .logo-badge {
             background: linear-gradient(135deg, #ff5f2d, #ff8052);
             color: white;
-            padding: 8px 14px;
-            border-radius: 12px;
+            padding: 6px 12px;
+            border-radius: 10px;
             font-weight: 700;
-            font-size: 14px;
+            font-size: 13px;
             letter-spacing: 0.5px;
             box-shadow: 0 4px 14px rgba(255, 95, 45, 0.3);
         }
 
         .header-title h1 {
-            font-size: 18px;
+            font-size: 17px;
             font-weight: 600;
         }
 
         .header-right {
             display: flex;
             align-items: center;
-            gap: 14px;
+            gap: 10px;
         }
 
-        .header-status {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 13px;
-            color: var(--text-sub);
-        }
-
-        .status-dot {
-            width: 8px;
-            height: 8px;
-            background-color: #10b981;
-            border-radius: 50%;
-            box-shadow: 0 0 10px #10b981;
-        }
-
-        .btn-reindex {
+        .btn-header {
             background: rgba(255, 255, 255, 0.08);
             border: 1px solid rgba(255, 255, 255, 0.15);
             color: #f1f5f9;
@@ -127,10 +111,22 @@
             transition: all 0.2s ease;
         }
 
-        .btn-reindex:hover {
+        .btn-header:hover {
             background: rgba(255, 95, 45, 0.2);
             border-color: var(--primary-orange);
             color: #ff8052;
+        }
+
+        .btn-reset-session {
+            background: rgba(239, 68, 68, 0.15);
+            border-color: rgba(239, 68, 68, 0.4);
+            color: #fca5a5;
+        }
+
+        .btn-reset-session:hover {
+            background: rgba(239, 68, 68, 0.3);
+            border-color: #ef4444;
+            color: #ffffff;
         }
 
         /* チャットログエリア */
@@ -343,7 +339,6 @@
             user-select: none;
         }
 
-        /* ロードインジケーター */
         .htmx-indicator {
             display: none;
         }
@@ -383,14 +378,15 @@
         <header>
             <div class="header-title">
                 <span class="logo-badge">GlobalLogic</span>
-                <h1>AI Voice & RAG QA Testing Chat</h1>
+                <h1>AI Voice & RAG Multi-turn Chat</h1>
             </div>
             <div class="header-right">
-                <div class="header-status">
-                    <span class="status-dot"></span>
-                    <span>FastAPI + ruri-v3 Vector DB</span>
-                </div>
-                <button type="button" class="btn-reindex" onclick="triggerReindex()" title="globallogic_qa.jsonの変更をDBへ再取り込み">
+                <!-- セッション初期化ボタン -->
+                <button type="button" class="btn-header btn-reset-session" onclick="triggerResetSession(true)" title="対話セッションと会話履歴を終了・初期化">
+                    <i class="bi bi-trash3-fill"></i> セッション初期化
+                </button>
+                <!-- DB再読み込みボタン -->
+                <button type="button" class="btn-header" onclick="triggerReindex()" title="globallogic_qa.jsonの変更をDBへ再取り込み">
                     <i class="bi bi-arrow-clockwise"></i> DB再読み込み
                 </button>
             </div>
@@ -403,12 +399,15 @@
                 <div class="avatar"><i class="bi bi-robot"></i></div>
                 <div class="bubble">
                     こんにちは！GlobalLogic Japan AI アシスタントです。<br>
-                    globallogic_qa.json を更新した場合、自動または右上の「DB再読み込み」ボタンでいつでも最新情報に再取り込みできます。
+                    前の質問の文脈を引き継いで会話が可能です。お気軽にご質問ください。<br>
+                    <span style="font-size: 12px; color: #a5b4fc; margin-top: 4px; display: inline-block;">
+                        ※ 3分間操作がない場合、セッションは「ご利用ありがとうございました。」と自動終了されます。
+                    </span>
                 </div>
             </div>
         </div>
 
-        <!-- インジケータ (ローディング) -->
+        <!-- ローディングインジケータ -->
         <div id="loading-indicator" class="htmx-indicator" style="padding: 0 24px 12px 24px;">
             <div class="message-row ai">
                 <div class="avatar"><i class="bi bi-robot"></i></div>
@@ -463,9 +462,49 @@
     </div>
 
     <script>
+        let idleTimer = null;
+        const THREE_MINUTES_MS = 3 * 60 * 1000; // 3分 (180,000ms)
+
+        // 3分無操作タイマーのリセットと開始
+        function resetIdleTimer() {
+            if (idleTimer) clearTimeout(idleTimer);
+            idleTimer = setTimeout(() => {
+                triggerResetSession(false, "3分間入力がなかったため、セッションを自動終了しました。");
+            }, THREE_MINUTES_MS);
+        }
+
+        // セッション初期化処理
+        async function triggerResetSession(manual = true, customMsg = null) {
+            if (idleTimer) clearTimeout(idleTimer);
+
+            try {
+                await fetch('/api/session/reset', { method: 'POST' });
+                
+                const chatBox = document.getElementById('chat-box');
+                const messageText = customMsg || "ご利用ありがとうございました。";
+                
+                const sysHtml = `
+                <div class="message-row ai">
+                    <div class="avatar" style="background: linear-gradient(135deg, #64748b, #334155);"><i class="bi bi-door-closed-fill"></i></div>
+                    <div class="bubble" style="border-color: #64748b; background: rgba(30, 41, 59, 0.9);">
+                        <strong>${messageText}</strong><br>
+                        <span style="font-size: 12px; color: #94a3b8;">会話履歴が初期化されました。新しい質問をお気軽にどうぞ！</span>
+                    </div>
+                </div>`;
+                
+                chatBox.insertAdjacentHTML('beforeend', sysHtml);
+                chatBox.scrollTop = chatBox.scrollHeight;
+
+                speakText(messageText);
+
+            } catch (err) {
+                console.error("セッション初期化エラー:", err);
+            }
+        }
+
         // DB再読み込み (POST /api/reindex)
         async function triggerReindex() {
-            const btn = document.querySelector('.btn-reindex');
+            const btn = document.querySelector('.btn-header:not(.btn-reset-session)');
             btn.innerHTML = '<i class="bi bi-arrow-clockwise spin"></i> 処理中...';
             btn.disabled = true;
 
@@ -473,7 +512,6 @@
                 const res = await fetch('/api/reindex', { method: 'POST' });
                 const data = await res.json();
                 
-                // システムメッセージ挿入
                 const chatBox = document.getElementById('chat-box');
                 const sysHtml = `
                 <div class="message-row ai">
@@ -520,8 +558,14 @@
                 if (lastAiBubble) {
                     speakText(lastAiBubble.innerText);
                 }
+
+                // 入力があったため 3 分タイマーをリセット開始
+                resetIdleTimer();
             }
         });
+
+        // 初期タイマーの起動
+        resetIdleTimer();
 
         // Web Speech API (音声入力)
         let recognition = null;

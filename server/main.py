@@ -3,11 +3,12 @@ import json
 import html
 import logging
 from typing import List, Optional
-from fastapi import FastAPI, Query, HTTPException, WebSocket, WebSocketDisconnect, Form
+from fastapi import FastAPI, Query, HTTPException, WebSocket, WebSocketDisconnect, Form, Cookie, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 import uvicorn
+import uuid
 
 from server.config import settings
 from server.rag_engine import RAGEngine
@@ -18,8 +19,8 @@ logger = logging.getLogger("APIServer")
 
 app = FastAPI(
     title="GlobalLogic Avatar & RAG Middleware API",
-    description="3D Avatar & Gemini Live API Middleware with RAG Knowledge Search & Test UI",
-    version="1.3.0"
+    description="3D Avatar & Gemini Live API Middleware with RAG Knowledge Search & Multi-turn Session Chat UI",
+    version="1.4.0"
 )
 
 # CORS設定
@@ -52,24 +53,28 @@ class SearchResponse(BaseModel):
     results: List[SearchResultItem]
     count: int
 
+class SessionResetRequest(BaseModel):
+    session_id: Optional[str] = None
+
 
 # 1. UIトップページ (HTML)
 @app.get("/", response_class=HTMLResponse)
-def read_index_ui():
+def read_index_ui(response: Response, session_id: Optional[str] = Cookie(None)):
+    if not session_id:
+        session_id = str(uuid.uuid4())
+        response.set_cookie(key="session_id", value=session_id)
+        
     template_path = os.path.join(os.path.dirname(__file__), "templates", "index.html")
     if not os.path.exists(template_path):
         raise HTTPException(status_code=404, detail="Template file index.html not found.")
     with open(template_path, "r", encoding="utf-8") as f:
         html_content = f.read()
-    return HTMLResponse(content=html_content)
+    return HTMLResponse(content=html_content, headers={"Set-Cookie": f"session_id={session_id}; Path=/"})
 
 
 # 2. Vector DB 初期化・再取り込み API (POST /api/reindex)
 @app.post("/api/reindex")
 def reindex_vector_db():
-    """
-    globallogic_qa.json を再読み込みし、Vector DB を初期化して再インデックスする
-    """
     try:
         result = rag_engine.reload_and_reindex()
         return result
@@ -78,13 +83,29 @@ def reindex_vector_db():
         raise HTTPException(status_code=500, detail=f"Reindexing failed: {str(e)}")
 
 
-# 3. HTMX専用 RAG チャット処理エンドポイント (LLM Conversational RAG)
+# 3. セッション初期化 API (POST /api/session/reset)
+@app.post("/api/session/reset")
+def reset_chat_session(
+    request: Optional[SessionResetRequest] = None,
+    session_id_cookie: Optional[str] = Cookie(None, alias="session_id")
+):
+    target_session_id = (request and request.session_id) or session_id_cookie or "default_session"
+    result = rag_engine.reset_session(session_id=target_session_id)
+    return result
+
+
+# 4. HTMX専用 RAG マルチターンチャット処理エンドポイント
 @app.post("/api/chat-ui", response_class=HTMLResponse)
-def handle_chat_ui(query: str = Form(...)):
+def handle_chat_ui(
+    query: str = Form(...),
+    session_id_cookie: Optional[str] = Cookie(None, alias="session_id"),
+    session_id_form: Optional[str] = Form(None)
+):
+    active_session_id = session_id_form or session_id_cookie or "default_session"
     escaped_query = html.escape(query.strip())
     
-    # RAG (検索 + 会話文生成) パイプラインを実行
-    rag_output = rag_engine.generate_rag_response(query=query, top_k=3)
+    # RAG (マルチターン会話履歴を引き継いだ検索＋生成) パイプラインを実行
+    rag_output = rag_engine.generate_rag_response(query=query, session_id=active_session_id, top_k=3)
     generated_text = html.escape(rag_output["generated_text"]).replace("\n", "<br>")
     results = rag_output["search_results"]
 
@@ -150,7 +171,7 @@ def handle_chat_ui(query: str = Form(...)):
     return HTMLResponse(content=user_html + ai_html)
 
 
-# 4. REST API / Healthcheck / WebSocket エンドポイント
+# 5. REST API / Healthcheck / WebSocket エンドポイント
 @app.get("/health")
 def health_check():
     return {
@@ -158,6 +179,7 @@ def health_check():
         "qa_count": len(rag_engine.documents),
         "chroma_active": rag_engine.is_chroma_active,
         "gemini_active": rag_engine.gemini_model is not None,
+        "active_sessions": len(rag_engine.sessions),
         "last_modified_time": rag_engine.last_modified_time
     }
 
@@ -184,7 +206,8 @@ async def websocket_avatar_endpoint(websocket: WebSocket):
             message = json.loads(data)
             if message.get("type") == "search_request":
                 q = message.get("query", "")
-                rag_out = rag_engine.generate_rag_response(query=q, top_k=3)
+                sess_id = message.get("session_id", "default_session")
+                rag_out = rag_engine.generate_rag_response(query=q, session_id=sess_id, top_k=3)
                 await websocket.send_text(json.dumps({"type": "search_response", "generated_text": rag_out["generated_text"], "results": rag_out["search_results"]}, ensure_ascii=False))
             else:
                 await websocket.send_text(json.dumps({"type": "echo", "message": f"Received: {message}"}))
