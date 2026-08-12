@@ -191,7 +191,7 @@ class RAGEngine:
         q_lower = query.lower()
         t_lower = target_text.lower()
         
-        keywords = ["サービス", "事業", "概要", "会社", "事例", "強み", "特徴", "提供", "内容", "料金", "費用", "拠点", "オフィス"]
+        keywords = ["ux", "ui", "デザイン", "サービス", "事業", "概要", "会社", "事例", "強み", "特徴", "提供", "内容", "料金", "費用", "拠点", "オフィス"]
         score = 0.0
         
         for kw in keywords:
@@ -240,26 +240,26 @@ class RAGEngine:
         return candidates[:top_k]
 
     def is_ambiguous_query(self, query: str, top_score: float) -> bool:
-        """質問の意図が不明瞭・曖昧かどうかを判定する"""
+        """質問の意図が不明瞭・曖昧・途中入力かどうかを判定する"""
         clean_q = query.strip().lower()
         
-        very_short_ambiguous = ["詳細", "教えて", "説明", "事例", "費用", "料金", "あれ", "それ", "サービス", "事業", "概要"]
-        if clean_q in very_short_ambiguous:
+        very_short_ambiguous = ["詳細", "教えて", "説明", "事例", "費用", "料金", "あれ", "それ", "サービス", "事業", "概要", "ui", "ux", "デザイン"]
+        if clean_q in very_short_ambiguous or clean_q.endswith("詳") or clean_q.endswith("について"):
             return True
 
-        if top_score < 0.25:
+        if top_score < 0.20:
             return True
 
         return False
 
     def generate_rag_response(self, query: str, session_id: str = "default_session", top_k: int = 3) -> Dict[str, Any]:
         """
-        マルチターン会話履歴を引き継ぎ、意図確認機能を含む RAG (検索＋生成) 対話応答処理
+        アバターとして親しみやすく対話が自然に続く会話型 RAG レスポンス生成
         """
         clean_q = query.strip()
         if not clean_q:
             return {
-                "generated_text": "質問を入力してください。",
+                "generated_text": "質問を入力してくださいね！どのようなことでもお気軽にどうぞ！",
                 "search_results": []
             }
 
@@ -293,15 +293,14 @@ class RAGEngine:
                     for i, r in enumerate(search_results)
                 ])
 
-                system_prompt = f"""あなたは GlobalLogic Japan の公式AIアバターアシスタントです。
-これまでの【過去の会話履歴】と【参照ナレッジ】を踏まえ、ユーザーの最新の質問に親しみやすく丁寧で自然に答えてください。
+                system_prompt = f"""あなたは GlobalLogic Japan の公式3D AIアバターアシスタントです。
+現在、ユーザーとリアルタイムで対話・会話を行っています。以下のルールを厳格に守って回答を生成してください。
 
-【最重要ルール：意図確認】
-ユーザーの質問が「詳細」「教えて」「費用」「事例」など一言で曖昧な場合や、何を質問したいのか対象が不明瞭な場合は、無関係なナレッジの回答を決めつけず、「どのような点についてお知りになりたいでしょうか？（例: 会社概要、サービス内容、導入事例、開発言語など）」と親切に意図を確認・聞き返してください。
-
-【その他の注意事項】
-- 質問の意図が「会社全体のサービス内容」であれば、サービス全体（デジタルエンジニアリング、AI、IT/OTトランスフォーメーション等）を包括的に分かりやすく答えてください。
-- 直前の会話履歴に指示語（「その会社」など）がある場合は、文脈を考慮して答えてください。
+【会話型アバターとしての最重要回答ルール】
+1. 絶対に「ご質問の『〇〇』についてお答えいたします」といった、データベースの質問タイトルを勝手に決めつけて断定する固定文・機械的表現を使わないでください。
+2. ユーザーの質問に対して、まずは「〜ですね！」「〜について知りたいのですね」と自然な相槌（あいづち）や共感から会話を始めてください。
+3. ユーザーの言葉が途切れていたり（「〜について詳」など）、曖昧な場合は、「〜について詳しくお知りになりたいでしょうか？弊社では〇〇といった取り組みを行っておりますが、技術やデザインシステム、導入事例など、どの点についてお話ししましょうか？」とアバターらしく優しく聞き返して対話を促してください。
+4. ナレッジの情報をそのまま読み上げるのではなく、話し言葉（口語体：「〜ですよ」「〜となっております」「〜をご案内できます」）で分かりやすく対話してください。
 
 【過去の会話履歴】
 {history_str}
@@ -312,7 +311,7 @@ class RAGEngine:
 【ユーザーの最新の質問】
 {clean_q}
 
-【回答文】"""
+【アバターの対話回答文】"""
 
                 response = self.gemini_model.generate_content(system_prompt)
                 if response and response.text:
@@ -326,42 +325,50 @@ class RAGEngine:
             except Exception as e:
                 logger.error(f"Gemini generation error: {e}")
 
-        # フォールバック対話生成
+        # フォールバック対話生成 (Gemini未設定またはエラー時)
         if is_greeting:
             generated_text = (
-                "こんにちは！私は GlobalLogic Japan の AI 公式アシスタントです。\n"
-                "弊社の会社概要をはじめ、デジタルエンジニアリング、AI（VelocityAI）、ソフトウェア開発、"
-                "IT/OTトランスフォーメーション、ならびに各種導入事例や強みについてお答えいたします。"
+                "こんにちは！GlobalLogic Japan の AIアバターアシスタントです！😊\n"
+                "弊社のデジタルエンジニアリングや UI/UX デザイン、AI活用事例などについて何でもお聞きくださいね。"
+                "本日はどのようなことについてお話ししましょうか？"
             )
-        elif is_ambiguous:
-            generated_text = (
-                f"ご質問の「{clean_q}」について、具体的にどのような点をお知りになりたいでしょうか？\n\n"
-                "例えば、以下のような内容をご案内できます：\n"
-                "・GlobalLogic Japan の会社概要や特徴\n"
-                "・提供している主なデジタルエンジニアリングサービス一覧\n"
-                "・製造業、通信、金融などの業界別導入事例\n"
-                "・AI（VelocityAI）やモダナイゼーションの支援内容\n\n"
-                "気になる項目や、より詳しいキーワードをお気軽にお知らせください！"
-            )
+        elif is_ambiguous or "ui" in clean_q.lower() or "ux" in clean_q.lower() or "デザイン" in clean_q:
+            # 断定せず対話を促す自然なアバター口調
+            if "ui" in clean_q.lower() or "ux" in clean_q.lower() or "デザイン" in clean_q:
+                generated_text = (
+                    f"「{clean_q}」についてですね！UI/UXデザインやエクスペリエンス設計に関するお話でしょうか？\n\n"
+                    "弊社 GlobalLogic では、デザインシステムの構築から最新のアクセシビリティ対応、マルチデバイス向けのアーキテクチャ構築まで幅広くご支援しております！\n\n"
+                    "具体的なデザイン構築手法、活用しているフロントエンド技術、実際の導入事例など、どのような側面について詳しくお話しいたしましょうか？"
+                )
+            else:
+                generated_text = (
+                    f"「{clean_q}」についてですね！具体的にどのような点をお知りになりたいでしょうか？\n\n"
+                    "例えば、会社概要や全体のサービス内容、業界別の導入事例、費用感や開発体制などについてお話しできますよ。"
+                    "気になるキーワードがあれば、ぜひ気軽にお知らせくださいね！"
+                )
         elif search_results:
             top = search_results[0]
+            answer_body = top['answer']
+            
             if "サービス" in clean_q or "事業" in clean_q or "内容" in clean_q:
                 generated_text = (
-                    "GlobalLogic Japan は、主に以下のデジタルエンジニアリングサービスを提供しております：\n"
-                    "1. エクスペリエンス設計 (UI/UXデザイン)\n"
-                    "2. インテリジェンス・エンジニアリング (データ＆AI・VelocityAI)\n"
-                    "3. ソフトウェア製品開発 ＆ クラウドプラットフォーム構築\n"
-                    "4. IT/OT トランスフォーメーション（製造業・通信・金融向けソリューション）\n\n"
-                    f"【詳細回答】\n{top['answer']}"
+                    "弊社のサービス内容についてご紹介しますね！\n\n"
+                    "GlobalLogic Japan では、主に『エクスペリエンス設計（UI/UX）』『データ＆AI活用』『ソフトウェア製品開発』『IT/OTトランスフォーメーション』の4領域を中心にデジタルエンジニアリングをご提供しています。\n\n"
+                    f"{answer_body}\n\n"
+                    "さらに詳しく知りたい分野や事例はございますか？"
                 )
-            elif "事例" in clean_q or "実績" in clean_q:
-                generated_text = f"【事例・実績のご紹介】\n{top['answer']}"
             else:
-                generated_text = f"ご質問の「{top['question']}」についてお答えいたします。\n\n{top['answer']}"
+                # 決めつけ断定文を完全排除した自然な対話形式
+                generated_text = (
+                    f"お問い合わせいただいた内容についてお話ししますね！\n\n"
+                    f"{answer_body}\n\n"
+                    "こちらについて、さらに気になる点や深掘りしたい部分はございますか？"
+                )
         else:
             generated_text = (
-                f"申し訳ありません。「{clean_q}」に関する直接の該当情報が見つかりませんでした。\n"
-                "どのような点についてお知りになりたいか、別のキーワード（例: 会社概要、サービス内容、導入事例など）でお聞かせいただけますでしょうか？"
+                f"「{clean_q}」についてのお問い合わせですね。\n"
+                "申し訳ありません、該当する詳しい情報がすぐに見つからなかったのですが、"
+                "会社概要、サービス一覧、導入事例など、どのような点についてお知りになりたいか教えていただけますか？"
             )
 
         history.append({"role": "user", "content": clean_q})
