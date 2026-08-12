@@ -79,12 +79,10 @@ class RAGEngine:
             try:
                 import google.generativeai as genai
                 genai.configure(api_key=api_key.strip())
-                # 安定モデル候補 (1.5-flash / 1.5-pro / gemini-pro)
                 candidates = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
                 for model_candidate in candidates:
                     try:
                         model = genai.GenerativeModel(model_candidate)
-                        # テスト生成を行ってエラーが出ないかチェック
                         model.generate_content("test")
                         self.gemini_model = model
                         logger.info(f"Gemini API LLM ('{model_candidate}') successfully configured and verified.")
@@ -199,14 +197,18 @@ class RAGEngine:
         
         score = 0.0
 
-        # 体制・契約・提供形態に関するキーワードブースト
-        if ("体制" in q_lower or "提供" in q_lower or "契約" in q_lower or "アジャイル" in q_lower) and ("体制" in t_lower or "契約" in t_lower or "チーム" in t_lower or "ラボ" in t_lower or "デリバリー" in t_lower):
+        # 事例・実績キーワードの重み付け強化
+        if ("事例" in q_lower or "実績" in q_lower or "ソリューション" in q_lower) and ("事例" in t_lower or "実績" in t_lower or "ソリューション" in t_lower or "導入" in t_lower or "開発" in t_lower):
             score += 0.5
+
+        # 体制・契約キーワード
+        if ("体制" in q_lower or "提供" in q_lower or "契約" in q_lower) and ("体制" in t_lower or "契約" in t_lower or "チーム" in t_lower or "ラボ" in t_lower or "デリバリー" in t_lower):
+            score += 0.4
 
         if "デジタルエンジニアリング" in q_lower and "デジタルエンジニアリング" in t_lower:
             score += 0.4
 
-        keywords = ["ux", "ui", "デザイン", "サービス", "事業", "概要", "会社", "事例", "強み", "特徴", "提供", "内容", "料金", "費用", "拠点", "オフィス"]
+        keywords = ["ux", "ui", "デザイン", "サービス", "事業", "概要", "会社", "強み", "特徴", "提供", "内容", "料金", "費用", "拠点", "オフィス"]
         for kw in keywords:
             if kw in q_lower and kw in t_lower:
                 score += 0.15
@@ -250,11 +252,11 @@ class RAGEngine:
         return candidates[:top_k]
 
     def is_ambiguous_query(self, query: str, top_score: float) -> bool:
-        """質問の意図が完全に不明瞭か判定（体制・サービス等具体的疑問詞がある場合はFalse）"""
+        """質問の意図が完全に不明瞭か判定（事例・体制など具体的疑問詞がある場合はFalse）"""
         clean_q = query.strip().lower()
         
-        # 明確な疑問詞やトピックが含まれる場合は曖昧判定しない
-        clear_topics = ["体制", "方法", "どこ", "いつ", "費用", "料金", "サービス", "契約", "デジタルエンジニアリング"]
+        # 事例・実績・体制・費用など明確な問い合わせ目的がある場合は絶対に曖昧判定しない
+        clear_topics = ["事例", "実績", "体制", "方法", "どこ", "いつ", "費用", "料金", "サービス", "契約", "デジタルエンジニアリング", "特徴", "強み"]
         if any(t in clean_q for t in clear_topics):
             return False
 
@@ -262,14 +264,14 @@ class RAGEngine:
         if clean_q in very_short_ambiguous or clean_q.endswith("詳"):
             return True
 
-        if top_score < 0.20:
+        if top_score < 0.15:
             return True
 
         return False
 
     def generate_rag_response(self, query: str, session_id: str = "default_session", top_k: int = 4) -> Dict[str, Any]:
         """
-        前後の会話文脈を踏まえたマルチターンAIアバター応答生成
+        前後の会話文脈を自然に引き継ぐマルチターンAIアバター応答生成
         """
         clean_q = query.strip()
         if not clean_q:
@@ -280,12 +282,19 @@ class RAGEngine:
 
         history = self._get_or_clean_session(session_id)
 
-        # 検索用クエリのスマート拡張（マルチターン文脈の引き継ぎ）
+        # 検索用クエリのスマート文脈合成（直前の話題と今回の問いの融合）
         expanded_query = clean_q
         if history:
+            # 過去の会話から直前のユーザー質問を取得
             last_user_q = next((h["content"] for h in reversed(history) if h["role"] == "user"), "")
-            if last_user_q and ("体制" in clean_q or "サービス" in clean_q or "内容" in clean_q or "それ" in clean_q or "その" in clean_q):
+            
+            # 「事例」「実績」「体制」「費用」「特徴」などの文脈依存語が来たら、直前クエリと強力合成
+            context_dependent_keywords = ["事例", "実績", "体制", "費用", "料金", "特徴", "強み", "具体的には", "例えば", "どんなもの", "それ", "その"]
+            is_context_dependent = any(k in clean_q for k in context_dependent_keywords)
+            
+            if last_user_q and (is_context_dependent or len(clean_q) <= 15):
                 expanded_query = f"{last_user_q} {clean_q}"
+                logger.info(f"[MultiTurnContext] Synthesized expanded search query: '{expanded_query}'")
 
         search_results = self.search_knowledge_base(query=expanded_query, top_k=top_k)
         top_score = search_results[0]["score"] if search_results else 0.0
@@ -301,7 +310,7 @@ class RAGEngine:
             for h in recent_history
         ]) if recent_history else "（これまでの会話はありません）"
 
-        # Gemini LLM 生成処理（マルチターン対話のコア）
+        # Gemini LLM 生成処理（マルチターン文脈理解の要）
         if self.gemini_model:
             try:
                 context_str = "\n\n".join([
@@ -310,12 +319,13 @@ class RAGEngine:
                 ])
 
                 system_prompt = f"""あなたは GlobalLogic Japan の公式3D AIアバターアシスタントです。
-ユーザーとリアルタイムでマルチターン（連続した対話）を行っています。以下のルールを厳格に守って回答を生成してください。
+ユーザーとリアルタイムでマルチターン（連続した会話）を行っています。以下のルールを厳格に守って自然で的確な回答を生成してください。
 
-【マルチターン対話アバターの最重要ルール】
-1. 直前の会話履歴（ユーザーとAIの過去のやり取り）を熟読し、ユーザーが『どのような体制でサービスを提供してくれるのか』『その費用は』など前の発言を受けた質問をしている場合は、直前のトピック（例: デジタルエンジニアリングなど）を前提とした文脈で的確に答えてください。
-2. 『どのような体制で〜』という質問に対して、定義（デジタルエンジニアリングとは〜）を繰り返すのは絶対にやめてください。参照ナレッジからグローバルデリバリー体制、ラボ型開発（T&M/専任チーム）、日立グループとの総合力など『体制・提供形態』に関する情報を抽出して説明してください。
-3. ユーザーの質問に対して「〇〇に関する体制についてですね！」と親しみやすく相槌を打ち、口語体（アバターの話し言葉）で親切に回答してください。同じ内容を繰り返さないでください。
+【マルチターン会話理解の最重要ルール】
+1. 【過去の会話履歴】を熟読してください！ユーザーが「具体的な事例はありますか？」「費用は？」のように主語を省略して質問した場合、直前の会話の話題（例: デジタルエンジニアリングなど）に対する事例・費用を聞いている意図を100%汲み取って回答してください。
+2. ユーザーが「事例」を聞いている場合、「事例について知りたいのですね！例えば〇〇の分野では...」と直前のトピックに関連する【参照ナレッジ】の具体的な事例（製造、通信、金融、AI活用など）を親切に紹介してください。「事例などについてお話しできますよ」というオウム返しの聞き返し質問をするのは絶対に禁止です！
+3. 絶対に「定義（デジタルエンジニアリングとは〜）」をただ繰り返さないでください。ユーザーが求めている「事例」「体制」「強み」などの具体的な中身に直接答えてください。
+4. 話し言葉（口語体のアバター口調：「〜ですね！」「〜となっております」「〜といった事例がございます」）で親しみやすく答えてください。
 
 【過去の会話履歴】
 {history_str}
@@ -344,10 +354,26 @@ class RAGEngine:
         if is_greeting:
             generated_text = (
                 "こんにちは！GlobalLogic Japan の AIアバターアシスタントです！😊\n"
-                "弊社のデジタルエンジニアリングや UI/UX デザイン、体制や事例などについてお気軽にご質問くださいね。"
+                "弊社のデジタルエンジニアリングや UI/UX デザイン、各種導入事例や体制についてお気軽にご質問くださいね。"
             )
+        elif "事例" in clean_q or "実績" in clean_q:
+            # 事例・実績についてのスマートフォールバック合成
+            case_items = [r for r in search_results if "事例" in r["question"] or "事例" in r["answer"] or "ソリューション" in r["category"] or "開発" in r["answer"]]
+            if case_items:
+                case_list = "\n".join([f"・{r['question']}: {r['answer']}" for r in case_items[:2]])
+                generated_text = (
+                    "具体的な事例・実績についてですね！😊\n\n"
+                    "GlobalLogic では、製造、通信、金融、ヘルスケアなど多様な業界でデジタルエンジニアリングの導入実績がございます。\n\n"
+                    f"{case_list}\n\n"
+                    "気になる特定の業界や技術分野の事例はございますか？"
+                )
+            else:
+                generated_text = (
+                    "具体事例についてですね！😊\n\n"
+                    "GlobalLogic では、製造業のIoT/デジタルツイン構築、通信事業者の5G/SDNシステム開発、金融機関のFinTechサービス基盤など、グローバル企業向けに多数の導入実績がございます。\n\n"
+                    "特定の業界やソリューション事例について、より詳しくお伝えしましょうか？"
+                )
         elif "体制" in clean_q or "提供" in clean_q or "チーム" in clean_q:
-            # 体制についてのスマートフォールバック合成
             structure_item = next((r for r in search_results if "体制" in r["answer"] or "チーム" in r["answer"] or "契約" in r["answer"] or "ラボ" in r["answer"] or "力" in r["answer"]), search_results[0] if search_results else None)
             answer_text = structure_item["answer"] if structure_item else "グローバル26カ国以上の拠点と専任のエンジニアリングチーム（ラボ型開発・T&M/Fixed Price）を組み、お客様のプロジェクトに柔軟に対応いたします。"
             
