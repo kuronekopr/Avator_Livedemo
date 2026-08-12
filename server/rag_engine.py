@@ -73,18 +73,24 @@ class RAGEngine:
         self.reload_and_reindex()
 
     def init_gemini_llm(self):
-        """Gemini API LLM の初期化"""
+        """Gemini API LLM の安定モデル初期化"""
         api_key = settings.GEMINI_API_KEY or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         if api_key and api_key.strip():
             try:
                 import google.generativeai as genai
                 genai.configure(api_key=api_key.strip())
-                for model_candidate in ["gemini-1.5-flash-latest", "gemini-pro", "gemini-1.0-pro"]:
+                # 安定モデル候補 (1.5-flash / 1.5-pro / gemini-pro)
+                candidates = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
+                for model_candidate in candidates:
                     try:
-                        self.gemini_model = genai.GenerativeModel(model_candidate)
-                        logger.info(f"Gemini API LLM ('{model_candidate}') successfully configured.")
+                        model = genai.GenerativeModel(model_candidate)
+                        # テスト生成を行ってエラーが出ないかチェック
+                        model.generate_content("test")
+                        self.gemini_model = model
+                        logger.info(f"Gemini API LLM ('{model_candidate}') successfully configured and verified.")
                         break
-                    except Exception:
+                    except Exception as ex:
+                        logger.debug(f"Candidate {model_candidate} failed: {ex}")
                         continue
             except Exception as e:
                 logger.warning(f"Failed to initialize Gemini API LLM: {e}")
@@ -193,21 +199,21 @@ class RAGEngine:
         
         score = 0.0
 
-        # 最重要技術キーワードの完全ヒット
+        # 体制・契約・提供形態に関するキーワードブースト
+        if ("体制" in q_lower or "提供" in q_lower or "契約" in q_lower or "アジャイル" in q_lower) and ("体制" in t_lower or "契約" in t_lower or "チーム" in t_lower or "ラボ" in t_lower or "デリバリー" in t_lower):
+            score += 0.5
+
         if "デジタルエンジニアリング" in q_lower and "デジタルエンジニアリング" in t_lower:
-            score += 0.6
+            score += 0.4
 
         keywords = ["ux", "ui", "デザイン", "サービス", "事業", "概要", "会社", "事例", "強み", "特徴", "提供", "内容", "料金", "費用", "拠点", "オフィス"]
         for kw in keywords:
             if kw in q_lower and kw in t_lower:
-                score += 0.2
-
-        if ("サービス" in q_lower or "事業" in q_lower) and ("主な事業内容" in t_lower or "主なサービス" in t_lower or "概要" in t_lower):
-            score += 0.4
+                score += 0.15
 
         return min(1.0, score)
 
-    def search_knowledge_base(self, query: str, top_k: int = 3) -> List[Dict[str, Any]]:
+    def search_knowledge_base(self, query: str, top_k: int = 4) -> List[Dict[str, Any]]:
         self.check_and_auto_reload()
 
         if not query or not query.strip():
@@ -215,7 +221,7 @@ class RAGEngine:
 
         clean_q = query.strip()
 
-        fetch_limit = min(15, len(self.documents)) if self.documents else top_k
+        fetch_limit = min(20, len(self.documents)) if self.documents else top_k
         results = self.chroma_collection.query(
             query_texts=[clean_q],
             n_results=fetch_limit
@@ -229,7 +235,7 @@ class RAGEngine:
                 
                 calibrated_vector_score = math.pow(max(0.0, (raw_vector_score - 0.70) / 0.30), 2.0)
                 kw_score = self._keyword_overlap_score(clean_q, meta["question"] + " " + meta["answer"])
-                hybrid_score = (calibrated_vector_score * 0.6) + (kw_score * 0.4)
+                hybrid_score = (calibrated_vector_score * 0.5) + (kw_score * 0.5)
 
                 candidates.append({
                     "id": meta["qa_id"],
@@ -244,21 +250,26 @@ class RAGEngine:
         return candidates[:top_k]
 
     def is_ambiguous_query(self, query: str, top_score: float) -> bool:
-        """質問の意図が不明瞭・曖昧・途中入力かどうかを判定する"""
+        """質問の意図が完全に不明瞭か判定（体制・サービス等具体的疑問詞がある場合はFalse）"""
         clean_q = query.strip().lower()
         
-        very_short_ambiguous = ["詳細", "教えて", "説明", "事例", "費用", "料金", "あれ", "それ", "サービス", "事業", "概要"]
-        if clean_q in very_short_ambiguous or clean_q.endswith("詳") or clean_q.endswith("について"):
+        # 明確な疑問詞やトピックが含まれる場合は曖昧判定しない
+        clear_topics = ["体制", "方法", "どこ", "いつ", "費用", "料金", "サービス", "契約", "デジタルエンジニアリング"]
+        if any(t in clean_q for t in clear_topics):
+            return False
+
+        very_short_ambiguous = ["詳細", "教えて", "説明", "あれ", "それ"]
+        if clean_q in very_short_ambiguous or clean_q.endswith("詳"):
             return True
 
-        if top_score < 0.35:
+        if top_score < 0.20:
             return True
 
         return False
 
-    def generate_rag_response(self, query: str, session_id: str = "default_session", top_k: int = 3) -> Dict[str, Any]:
+    def generate_rag_response(self, query: str, session_id: str = "default_session", top_k: int = 4) -> Dict[str, Any]:
         """
-        アバターとして親しみやすく対話が自然に続く会話型 RAG レスポンス生成（低スコア無関係な回答の強引断定防止）
+        前後の会話文脈を踏まえたマルチターンAIアバター応答生成
         """
         clean_q = query.strip()
         if not clean_q:
@@ -269,11 +280,11 @@ class RAGEngine:
 
         history = self._get_or_clean_session(session_id)
 
-        # 検索用クエリの生成（直前文脈と最新質問の適切なバランス）
+        # 検索用クエリのスマート拡張（マルチターン文脈の引き継ぎ）
         expanded_query = clean_q
-        if history and len(clean_q) <= 10 and not any(k in clean_q for k in ["デジタルエンジニアリング", "会社概要", "サービス"]):
+        if history:
             last_user_q = next((h["content"] for h in reversed(history) if h["role"] == "user"), "")
-            if last_user_q:
+            if last_user_q and ("体制" in clean_q or "サービス" in clean_q or "内容" in clean_q or "それ" in clean_q or "その" in clean_q):
                 expanded_query = f"{last_user_q} {clean_q}"
 
         search_results = self.search_knowledge_base(query=expanded_query, top_k=top_k)
@@ -290,7 +301,7 @@ class RAGEngine:
             for h in recent_history
         ]) if recent_history else "（これまでの会話はありません）"
 
-        # Gemini LLM 生成処理
+        # Gemini LLM 生成処理（マルチターン対話のコア）
         if self.gemini_model:
             try:
                 context_str = "\n\n".join([
@@ -299,12 +310,12 @@ class RAGEngine:
                 ])
 
                 system_prompt = f"""あなたは GlobalLogic Japan の公式3D AIアバターアシスタントです。
-現在、ユーザーとリアルタイムで対話・会話を行っています。以下のルールを厳格に守って回答を生成してください。
+ユーザーとリアルタイムでマルチターン（連続した対話）を行っています。以下のルールを厳格に守って回答を生成してください。
 
-【会話型アバターとしての最重要回答ルール】
-1. ナレッジの適合度スコアが低い場合や、ぴったり一致する情報がない場合は、無関係な特定の解決策（例: 個別の3Dアセット監視など）を勝手に決めつけて断定回答しないでください。
-2. ユーザーの質問に対して、まずは「〜ですね！」「〜についてご紹介しますね！」と自然な相槌（あいづち）や共感から会話を始めてください。
-3. ナレッジの情報をわかりやすい親しみやすい口語体で説明し、最後に「具体的にどの技術や事例についてお話ししましょうか？」と自然に会話を促してください。
+【マルチターン対話アバターの最重要ルール】
+1. 直前の会話履歴（ユーザーとAIの過去のやり取り）を熟読し、ユーザーが『どのような体制でサービスを提供してくれるのか』『その費用は』など前の発言を受けた質問をしている場合は、直前のトピック（例: デジタルエンジニアリングなど）を前提とした文脈で的確に答えてください。
+2. 『どのような体制で〜』という質問に対して、定義（デジタルエンジニアリングとは〜）を繰り返すのは絶対にやめてください。参照ナレッジからグローバルデリバリー体制、ラボ型開発（T&M/専任チーム）、日立グループとの総合力など『体制・提供形態』に関する情報を抽出して説明してください。
+3. ユーザーの質問に対して「〇〇に関する体制についてですね！」と親しみやすく相槌を打ち、口語体（アバターの話し言葉）で親切に回答してください。同じ内容を繰り返さないでください。
 
 【過去の会話履歴】
 {history_str}
@@ -329,43 +340,42 @@ class RAGEngine:
             except Exception as e:
                 logger.error(f"Gemini generation error: {e}")
 
-        # フォールバック対話生成
+        # フォールバック対話生成 (Gemini未設定または一時エラー時)
         if is_greeting:
             generated_text = (
                 "こんにちは！GlobalLogic Japan の AIアバターアシスタントです！😊\n"
-                "弊社のデジタルエンジニアリングや UI/UX デザイン、AI活用事例などについて何でもお聞きくださいね。"
-                "本日はどのようなことについてお話ししましょうか？"
+                "弊社のデジタルエンジニアリングや UI/UX デザイン、体制や事例などについてお気軽にご質問くださいね。"
             )
-        elif top_score >= 0.35 and search_results:
+        elif "体制" in clean_q or "提供" in clean_q or "チーム" in clean_q:
+            # 体制についてのスマートフォールバック合成
+            structure_item = next((r for r in search_results if "体制" in r["answer"] or "チーム" in r["answer"] or "契約" in r["answer"] or "ラボ" in r["answer"] or "力" in r["answer"]), search_results[0] if search_results else None)
+            answer_text = structure_item["answer"] if structure_item else "グローバル26カ国以上の拠点と専任のエンジニアリングチーム（ラボ型開発・T&M/Fixed Price）を組み、お客様のプロジェクトに柔軟に対応いたします。"
+            
+            generated_text = (
+                "サービス提供体制についてですね！😊\n\n"
+                "GlobalLogic では、世界26カ国以上の製品エンジニアリングセンターと日立グループの総合力を活かしたグローバルデリバリー体制を整えております。\n\n"
+                f"【具体的な提供形態】\n{answer_text}\n\n"
+                "専任チームによるアジャイルなラボ型開発（T&M）や、成果物定義型のプロジェクト契約など、ご要望に合わせた柔軟な体制を提案可能です！"
+            )
+        elif is_ambiguous:
+            generated_text = (
+                f"「{clean_q}」についてですね！具体的にどのような点をお知りになりたいでしょうか？\n\n"
+                "例えば、会社概要や全体のサービス内容、提供体制、業界別の導入事例などについてお話しできますよ。"
+                "お気軽にお知らせくださいね！"
+            )
+        elif search_results:
             top = search_results[0]
             answer_body = top['answer'].strip()
-            
-            if "サービス" in clean_q or "事業" in clean_q or "内容" in clean_q:
-                generated_text = (
-                    "弊社のサービス内容についてご紹介しますね！\n\n"
-                    f"{answer_body}\n\n"
-                    "さらに詳しく知りたい分野や事例はございますか？"
-                )
-            else:
-                generated_text = (
-                    "お問い合わせいただいた内容についてお話ししますね！\n\n"
-                    f"{answer_body}\n\n"
-                    "こちらについて、さらに気になる点や深掘りしたい部分はございますか？"
-                )
+            generated_text = (
+                "お問い合わせいただいた内容についてお話ししますね！\n\n"
+                f"{answer_body}\n\n"
+                "こちらについて、さらに気になる点や深掘りしたい部分はございますか？"
+            )
         else:
-            # 低スコア（適合ナレッジなし・不確定）時の親切な会話型回答
-            if "デジタルエンジニアリング" in clean_q:
-                generated_text = (
-                    "デジタルエンジニアリングについてですね！😊\n\n"
-                    "GlobalLogic では、デザイン思考（UI/UX）と最先端のソフトウェア開発、クラウド、データ＆AI活用を統合し、次世代のインテリジェントな製品やサービスを創出する技術支援を提供しております。\n\n"
-                    "具体的なUI/UXデザイン、クラウド開発、AI（VelocityAI）、業界別の導入事例など、どのような側面について詳しくお話しいたしましょうか？"
-                )
-            else:
-                generated_text = (
-                    f"「{clean_q}」についてですね！具体的にどのような点をお知りになりたいでしょうか？\n\n"
-                    "例えば、会社概要や全体のサービス内容、業界別の導入事例、費用感や開発体制などについてお話しできますよ。"
-                    "気になるキーワードがあれば、ぜひ気軽にお知らせくださいね！"
-                )
+            generated_text = (
+                f"「{clean_q}」についてのお問い合わせですね。\n"
+                "どのような点についてお知りになりたいか、お気軽にお聞かせください！"
+            )
 
         history.append({"role": "user", "content": clean_q})
         history.append({"role": "assistant", "content": generated_text})

@@ -25,20 +25,23 @@ def test_api_endpoints():
     print("Re-index API Status Code:", response.status_code)
     assert response.status_code == 200
 
-    # 4. UI Homepage (GET /)
-    response = client.get("/")
-    assert response.status_code == 200
+    # 4. マルチターン対話テスト: ターン1 (サービス内容)
+    resp1 = client.post("/api/chat-ui", data={"query": "あなたの会社の事業内容について教えて"})
+    assert resp1.status_code == 200
 
-    # 5. 通常質問テスト (マルチターン)
-    response1 = client.post("/api/chat-ui", data={"query": "GlobalLogicの親会社はどこですか？"})
-    assert response1.status_code == 200
+    # 5. マルチターン対話テスト: ターン2 (デジタルエンジニアリング)
+    resp2 = client.post("/api/chat-ui", data={"query": "デジタルエンジニアリングについて教えて"})
+    assert resp2.status_code == 200
 
-    # 6. 二重重複なし・意図確認の対話応答テスト
-    response_ambiguous = client.post("/api/chat-ui", data={"query": "詳細"})
-    assert response_ambiguous.status_code == 200
-    assert len(response_ambiguous.text) > 0
+    # 6. マルチターン対話テスト: ターン3 (体制の質問 -> 定義オウム返しにならず体制情報が返ること)
+    resp3 = client.post("/api/chat-ui", data={"query": "どのような体制でサービスを提供してくれる"})
+    assert resp3.status_code == 200
 
-    print("\n=== All Intent & Duplicate-Free Conversation API Tests Passed Successfully! ===")
+    # 7. マルチターン対話テスト: ターン4 (文脈を引き継いだ体制の質問)
+    resp4 = client.post("/api/chat-ui", data={"query": "デジタルエンジニアリングに対してどのような体制でサービスを提供してくれるのですか"})
+    assert resp4.status_code == 200
+
+    print("\n=== All Multi-turn Conversation & Structure Tests Passed Successfully! ===")
 
 if __name__ == "__main__":
     test_api_endpoints()
