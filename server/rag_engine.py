@@ -79,12 +79,10 @@ class RAGEngine:
             try:
                 import google.generativeai as genai
                 genai.configure(api_key=api_key.strip())
-                # 現行安定モデル
                 candidates = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
                 for model_candidate in candidates:
                     try:
                         model = genai.GenerativeModel(model_candidate)
-                        # 簡単な生成テスト
                         test_resp = model.generate_content("Hi")
                         if test_resp:
                             self.gemini_model = model
@@ -270,7 +268,7 @@ class RAGEngine:
 
     def generate_rag_response(self, query: str, session_id: str = "default_session", top_k: int = 4) -> Dict[str, Any]:
         """
-        生データの漏れを完全防止し、対話型アバターとして洗練された RAG 応答生成
+        文頭決めつけ全廃 ＆ 文末枕詞を初回限定化した会話型 RAG レスポンス生成
         """
         clean_q = query.strip()
         if not clean_q:
@@ -280,6 +278,7 @@ class RAGEngine:
             }
 
         history = self._get_or_clean_session(session_id)
+        is_first_turn = (len(history) == 0)
 
         # 検索用クエリのスマート文脈合成
         expanded_query = clean_q
@@ -306,7 +305,14 @@ class RAGEngine:
             for h in recent_history
         ]) if recent_history else "（これまでの会話はありません）"
 
-        # Gemini LLM 生成処理（洗練された対話生成）
+        # 文末枕詞ルールの設定（初回質問時のみ文末にクッションフレーズを許可）
+        ending_rule = (
+            "【初回質問時の特別ルール】会話の最後に1言だけ『気になる点があればお気軽にお知らせくださいね』等の短い丁寧な文末の添え言葉を付けて構いません。"
+            if is_first_turn else
+            "【2回目以降の会話ルール】文末の『〜について、さらに気になる点や深掘りしたい部分はございますか？』等の余計な問いかけ・枕詞・クッション言葉は絶対に付けず、回答本文のみで簡潔・スムーズに終了してください！"
+        )
+
+        # Gemini LLM 生成処理
         if self.gemini_model:
             try:
                 context_str = "\n\n".join([
@@ -315,13 +321,12 @@ class RAGEngine:
                 ])
 
                 system_prompt = f"""あなたは GlobalLogic Japan の公式3D AIアバターアシスタントです。
-ユーザーとリアルタイムで会話を行っています。以下のルールを守り、プロフェッショナルかつ親しみやすい会話文を作成してください。
+ユーザーとリアルタイムで会話を行っています。以下のルールを厳格に守って回答を作成してください。
 
-【厳格ルール】
-1. 絶対に「質問文：回答文」といったデータベースの生テキストをそのまま出力しないでください！
-2. ユーザーが「事例について教えて」と聞いた場合、「デジタルエンジニアリングの導入事例ですね！」と受け止め、【参照ナレッジ】に記載されている具体的な業界（製造業、通信、金融、ヘルスケア、AI等）の実戦事例や取り組み成果を、分かりやすい自然な文章で紹介してください。
-3. 定義文（デジタルエンジニアリングとは〜）の不要な重複リピートは避けてください。
-4. 口語体のアバター口調（「〜ですね！」「〜となっております」「〜といった取り組みがございます」）でスムーズに答えてください。
+【最重要出力ルール】
+1. 『お問い合わせいただいた内容についてお話ししますね！』『弊社のサービス内容についてご紹介しますね！』などの文頭の定型挨拶や決めつけ言葉は一切出力しないでください！直接、回答本文から開始してください。
+2. {ending_rule}
+3. 質問に対する回答本文をナレッジから正確に抽出し、口語体（アバター口調）で分かりやすく述べてください。
 
 【過去の会話履歴】
 {history_str}
@@ -346,14 +351,15 @@ class RAGEngine:
             except Exception as e:
                 logger.error(f"Gemini generation error: {e}")
 
-        # フォールバック対話生成 (生データの漏れ出しを完全防止した美しい日本語合成)
+        # フォールバック対話生成 (文頭定型フレーズ全廃 ＆ 文末枕詞の初回限定化)
+        first_turn_suffix = "\n\n気になる点やご質問があればお気軽にお知らせくださいね！" if is_first_turn else ""
+
         if is_greeting:
             generated_text = (
                 "こんにちは！GlobalLogic Japan の AIアバターアシスタントです！😊\n"
                 "弊社のデジタルエンジニアリングや UI/UX デザイン、各種導入事例や体制についてお気軽にご質問くださいね。"
             )
         elif "事例" in clean_q or "実績" in clean_q:
-            # 生データ「・Q: A」の流出を完全追放し、自然な事例文として整形
             solution_items = [r for r in search_results if r["category"] == "対象産業・業界別ソリューション" or "事例" in r["answer"] or "ソリューション" in r["answer"]]
             if not solution_items:
                 solution_items = search_results
@@ -361,39 +367,34 @@ class RAGEngine:
             examples_text = "\n".join([f"・{r['answer']}" for r in solution_items[:2]])
             
             generated_text = (
-                "具体事例についてですね！😊\n\n"
-                "GlobalLogic では、多様な業界でデジタルエンジニアリングの具体的な導入実績がございます。\n\n"
-                f"{examples_text}\n\n"
-                "特定の業界（製造業、通信、金融、ヘルスケアなど）の事例について、さらに詳しくお伝えしましょうか？"
+                "GlobalLogic では、多様な業界で以下のような具体的なデジタルエンジニアリングの導入実績がございます。\n\n"
+                f"{examples_text}"
+                f"{first_turn_suffix}"
             )
         elif "体制" in clean_q or "提供" in clean_q or "チーム" in clean_q:
             structure_item = next((r for r in search_results if "体制" in r["answer"] or "チーム" in r["answer"] or "契約" in r["answer"] or "ラボ" in r["answer"]), search_results[0] if search_results else None)
             answer_text = structure_item["answer"] if structure_item else "グローバル26カ国以上の拠点と専任のエンジニアリングチーム（ラボ型開発・T&M/Fixed Price）を組み、柔軟に対応いたします。"
             
             generated_text = (
-                "サービス提供体制についてですね！😊\n\n"
                 "GlobalLogic では、世界26カ国以上の製品エンジニアリングセンターと日立グループの総合力を活かしたグローバルデリバリー体制を整えております。\n\n"
-                f"【具体的な提供形態】\n{answer_text}\n\n"
-                "専任チームによるアジャイルなラボ型開発（T&M）や、成果物定義型のプロジェクト契約など、ご要望に合わせた柔軟な体制を提案可能です！"
+                f"{answer_text}"
+                f"{first_turn_suffix}"
             )
         elif is_ambiguous:
             generated_text = (
-                f"「{clean_q}」についてですね！具体的にどのような点をお知りになりたいでしょうか？\n\n"
+                f"「{clean_q}」についてですね。具体的にどのような点をお知りになりたいでしょうか？\n\n"
                 "例えば、会社概要や全体のサービス内容、提供体制、業界別の導入事例などについてお話しできますよ。"
-                "お気軽にお知らせくださいね！"
             )
         elif search_results:
             top = search_results[0]
             answer_body = top['answer'].strip()
             generated_text = (
-                "お問い合わせいただいた内容についてお話ししますね！\n\n"
-                f"{answer_body}\n\n"
-                "こちらについて、さらに気になる点や深掘りしたい部分はございますか？"
+                f"{answer_body}"
+                f"{first_turn_suffix}"
             )
         else:
             generated_text = (
-                f"「{clean_q}」についてのお問い合わせですね。\n"
-                "どのような点についてお知りになりたいか、お気軽にお聞かせください！"
+                f"「{clean_q}」に関する詳しい情報が見つかりませんでした。別のキーワードでお気軽にお聞きくださいね。"
             )
 
         history.append({"role": "user", "content": clean_q})
