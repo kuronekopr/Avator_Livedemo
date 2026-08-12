@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GlobalLogic AI RAG Chat QA Test UI</title>
+    <!-- HTMX CDN -->
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Bootstrap Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: rgba(30, 41, 59, 0.7);
+            --card-border: rgba(255, 255, 255, 0.1);
+            --primary-orange: #ff5f2d;
+            --primary-orange-hover: #ff764a;
+            --text-main: #f8fafc;
+            --text-sub: #94a3b8;
+            --user-bubble: #1e293b;
+            --ai-bubble: #1e1b4b;
+            --badge-bg: rgba(255, 95, 45, 0.15);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+        }
+
+        body {
+            background: radial-gradient(circle at top right, #1e1b4b 0%, #0f172a 50%, #020617 100%);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 900px;
+            height: 90vh;
+            background: var(--card-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--card-border);
+            border-radius: 24px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        header {
+            padding: 20px 28px;
+            background: rgba(15, 23, 42, 0.6);
+            border-bottom: 1px solid var(--card-border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .header-title {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo-badge {
+            background: linear-gradient(135deg, #ff5f2d, #ff8052);
+            color: white;
+            padding: 8px 14px;
+            border-radius: 12px;
+            font-weight: 700;
+            font-size: 14px;
+            letter-spacing: 0.5px;
+            box-shadow: 0 4px 14px rgba(255, 95, 45, 0.3);
+        }
+
+        .header-title h1 {
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .header-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--text-sub);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background-color: #10b981;
+            border-radius: 50%;
+            box-shadow: 0 0 10px #10b981;
+        }
+
+        .btn-reindex {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            color: #f1f5f9;
+            padding: 6px 12px;
+            border-radius: 10px;
+            font-size: 12px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s ease;
+        }
+
+        .btn-reindex:hover {
+            background: rgba(255, 95, 45, 0.2);
+            border-color: var(--primary-orange);
+            color: #ff8052;
+        }
+
+        /* チャットログエリア */
+        .chat-box {
+            flex: 1;
+            padding: 24px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            scroll-behavior: smooth;
+        }
+
+        .chat-box::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .chat-box::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 3px;
+        }
+
+        .message-row {
+            display: flex;
+            gap: 14px;
+            max-width: 85%;
+        }
+
+        .message-row.user {
+            align-self: flex-end;
+            flex-direction: row-reverse;
+        }
+
+        .message-row.ai {
+            align-self: flex-start;
+        }
+
+        .avatar {
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            flex-shrink: 0;
+        }
+
+        .user .avatar {
+            background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+            color: white;
+        }
+
+        .ai .avatar {
+            background: linear-gradient(135deg, #ff5f2d, #c2410c);
+            color: white;
+        }
+
+        .bubble {
+            padding: 16px 20px;
+            border-radius: 20px;
+            font-size: 15px;
+            line-height: 1.6;
+            position: relative;
+        }
+
+        .user .bubble {
+            background: var(--user-bubble);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-top-right-radius: 4px;
+            color: #f1f5f9;
+        }
+
+        .ai .bubble {
+            background: var(--ai-bubble);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+            border-top-left-radius: 4px;
+            color: #f8fafc;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+        }
+
+        .qa-meta {
+            margin-top: 12px;
+            padding-top: 10px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            font-size: 12px;
+            color: var(--text-sub);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .tag {
+            background: var(--badge-bg);
+            color: #ff8052;
+            padding: 3px 8px;
+            border-radius: 6px;
+            font-weight: 500;
+            font-size: 11px;
+        }
+
+        .score-tag {
+            background: rgba(16, 185, 129, 0.15);
+            color: #34d399;
+            padding: 3px 8px;
+            border-radius: 6px;
+            font-weight: 500;
+            font-size: 11px;
+        }
+
+        /* コントロールエリア */
+        .input-area {
+            padding: 20px 24px;
+            background: rgba(15, 23, 42, 0.8);
+            border-top: 1px solid var(--card-border);
+        }
+
+        .input-form {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: rgba(30, 41, 59, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 16px;
+            padding: 8px 12px 8px 20px;
+            transition: all 0.2s ease;
+        }
+
+        .input-form:focus-within {
+            border-color: var(--primary-orange);
+            box-shadow: 0 0 0 3px rgba(255, 95, 45, 0.2);
+        }
+
+        .chat-input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            outline: none;
+            color: white;
+            font-size: 15px;
+        }
+
+        .chat-input::placeholder {
+            color: #64748b;
+        }
+
+        .btn-icon {
+            width: 42px;
+            height: 42px;
+            border-radius: 12px;
+            border: none;
+            outline: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            transition: all 0.2s ease;
+        }
+
+        .btn-mic {
+            background: rgba(255, 255, 255, 0.05);
+            color: #94a3b8;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .btn-mic:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: #f1f5f9;
+        }
+
+        .btn-mic.recording {
+            background: #ef4444;
+            color: white;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+            70% { box-shadow: 0 0 0 12px rgba(239, 68, 68, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+
+        .btn-send {
+            background: var(--primary-orange);
+            color: white;
+        }
+
+        .btn-send:hover {
+            background: var(--primary-orange-hover);
+            transform: translateY(-1px);
+        }
+
+        .options-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-top: 10px;
+            padding: 0 4px;
+            font-size: 12px;
+            color: var(--text-sub);
+        }
+
+        .tts-toggle {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        /* ロードインジケーター */
+        .htmx-indicator {
+            display: none;
+        }
+
+        .htmx-request .htmx-indicator,
+        .htmx-request.htmx-indicator {
+            display: flex;
+        }
+
+        .typing-dots {
+            display: flex;
+            gap: 4px;
+            padding: 8px 12px;
+        }
+
+        .typing-dots span {
+            width: 8px;
+            height: 8px;
+            background: #a5b4fc;
+            border-radius: 50%;
+            animation: blink 1.4s infinite ease-in-out both;
+        }
+
+        .typing-dots span:nth-child(1) { animation-delay: -0.32s; }
+        .typing-dots span:nth-child(2) { animation-delay: -0.16s; }
+
+        @keyframes blink {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1); }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <!-- ヘッダー -->
+        <header>
+            <div class="header-title">
+                <span class="logo-badge">GlobalLogic</span>
+                <h1>AI Voice & RAG QA Testing Chat</h1>
+            </div>
+            <div class="header-right">
+                <div class="header-status">
+                    <span class="status-dot"></span>
+                    <span>FastAPI + ruri-v3 Vector DB</span>
+                </div>
+                <button type="button" class="btn-reindex" onclick="triggerReindex()" title="globallogic_qa.jsonの変更をDBへ再取り込み">
+                    <i class="bi bi-arrow-clockwise"></i> DB再読み込み
+                </button>
+            </div>
+        </header>
+
+        <!-- チャット履歴エリア -->
+        <div class="chat-box" id="chat-box">
+            <!-- 初期挨拶メッセージ -->
+            <div class="message-row ai">
+                <div class="avatar"><i class="bi bi-robot"></i></div>
+                <div class="bubble">
+                    こんにちは！GlobalLogic Japan AI アシスタントです。<br>
+                    globallogic_qa.json を更新した場合、自動または右上の「DB再読み込み」ボタンでいつでも最新情報に再取り込みできます。
+                </div>
+            </div>
+        </div>
+
+        <!-- インジケータ (ローディング) -->
+        <div id="loading-indicator" class="htmx-indicator" style="padding: 0 24px 12px 24px;">
+            <div class="message-row ai">
+                <div class="avatar"><i class="bi bi-robot"></i></div>
+                <div class="bubble">
+                    <div class="typing-dots">
+                        <span></span><span></span><span></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- コントロール・入力フォーム -->
+        <div class="input-area">
+            <form id="chat-form"
+                  hx-post="/api/chat-ui"
+                  hx-target="#chat-box"
+                  hx-swap="beforeend"
+                  hx-indicator="#loading-indicator"
+                  class="input-form">
+                
+                <input type="text"
+                       name="query"
+                       id="query-input"
+                       class="chat-input"
+                       placeholder="質問を入力するか、マイクボタンを押して喋ってください..."
+                       required
+                       autocomplete="off">
+
+                <!-- 音声入力マイクボタン -->
+                <button type="button"
+                        id="mic-btn"
+                        class="btn-icon btn-mic"
+                        title="音声入力（マイク）"
+                        onclick="toggleSpeechRecognition()">
+                    <i class="bi bi-mic-fill"></i>
+                </button>
+
+                <!-- 送信ボタン -->
+                <button type="submit" class="btn-icon btn-send" title="送信">
+                    <i class="bi bi-send-fill"></i>
+                </button>
+            </form>
+
+            <div class="options-bar">
+                <label class="tts-toggle">
+                    <input type="checkbox" id="tts-enabled" checked>
+                    <span><i class="bi bi-volume-up"></i> 回答を自動音声読み上げ (Web Speech TTS)</span>
+                </label>
+                <span>Press Enter to send</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // DB再読み込み (POST /api/reindex)
+        async function triggerReindex() {
+            const btn = document.querySelector('.btn-reindex');
+            btn.innerHTML = '<i class="bi bi-arrow-clockwise spin"></i> 処理中...';
+            btn.disabled = true;
+
+            try {
+                const res = await fetch('/api/reindex', { method: 'POST' });
+                const data = await res.json();
+                
+                // システムメッセージ挿入
+                const chatBox = document.getElementById('chat-box');
+                const sysHtml = `
+                <div class="message-row ai">
+                    <div class="avatar" style="background: #10b981;"><i class="bi bi-check-lg"></i></div>
+                    <div class="bubble" style="border-color: #10b981;">
+                        ✅ <strong>globallogic_qa.json の再インデックス完了</strong><br>
+                        全 ${data.qa_count} 件のQAデータを ruri-v3 ベクトルDBへ登録しました。
+                    </div>
+                </div>`;
+                chatBox.insertAdjacentHTML('beforeend', sysHtml);
+                chatBox.scrollTop = chatBox.scrollHeight;
+            } catch (err) {
+                alert("再読み込みエラー: " + err);
+            } finally {
+                btn.innerHTML = '<i class="bi bi-arrow-clockwise"></i> DB再読み込み';
+                btn.disabled = false;
+            }
+        }
+
+        // 音声合成 (TTS)
+        function speakText(text) {
+            const ttsEnabled = document.getElementById('tts-enabled').checked;
+            if (!ttsEnabled || !('speechSynthesis' in window)) return;
+
+            window.speechSynthesis.cancel();
+            const cleanText = text.replace(/<[^>]*>?/gm, '');
+            const utterance = new SpeechSynthesisUtterance(cleanText);
+            utterance.lang = 'ja-JP';
+            utterance.rate = 1.0;
+            utterance.pitch = 1.0;
+            window.speechSynthesis.speak(utterance);
+        }
+
+        // HTMX イベントリスナー：レスポンス受信後処理
+        document.body.addEventListener('htmx:afterOnLoad', function(evt) {
+            if (evt.detail.elt && evt.detail.elt.id === 'chat-form') {
+                const input = document.getElementById('query-input');
+                input.value = '';
+
+                const chatBox = document.getElementById('chat-box');
+                chatBox.scrollTop = chatBox.scrollHeight;
+
+                const lastAiBubble = chatBox.querySelector('.message-row.ai:last-child .answer-text');
+                if (lastAiBubble) {
+                    speakText(lastAiBubble.innerText);
+                }
+            }
+        });
+
+        // Web Speech API (音声入力)
+        let recognition = null;
+        let isRecording = false;
+
+        if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            recognition = new SpeechRecognition();
+            recognition.lang = 'ja-JP';
+            recognition.continuous = false;
+            recognition.interimResults = true;
+
+            recognition.onstart = function() {
+                isRecording = true;
+                const micBtn = document.getElementById('mic-btn');
+                micBtn.classList.add('recording');
+                micBtn.innerHTML = '<i class="bi bi-stop-fill"></i>';
+            };
+
+            recognition.onresult = function(event) {
+                let transcript = '';
+                for (let i = event.resultIndex; i < event.results.length; ++i) {
+                    transcript += event.results[i][0].transcript;
+                }
+                document.getElementById('query-input').value = transcript;
+            };
+
+            recognition.onerror = function(event) {
+                console.error("Speech recognition error:", event.error);
+                stopRecording();
+            };
+
+            recognition.onend = function() {
+                stopRecording();
+            };
+        } else {
+            console.warn("Speech Recognition API is not supported in this browser.");
+            document.getElementById('mic-btn').style.display = 'none';
+        }
+
+        function toggleSpeechRecognition() {
+            if (!recognition) return;
+            if (isRecording) {
+                recognition.stop();
+            } else {
+                recognition.start();
+            }
+        }
+
+        function stopRecording() {
+            isRecording = false;
+            const micBtn = document.getElementById('mic-btn');
+            micBtn.classList.remove('recording');
+            micBtn.innerHTML = '<i class="bi bi-mic-fill"></i>';
+        }
+    </script>
+</body>
+</html>
