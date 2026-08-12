@@ -191,15 +191,19 @@ class RAGEngine:
         q_lower = query.lower()
         t_lower = target_text.lower()
         
-        keywords = ["ux", "ui", "デザイン", "サービス", "事業", "概要", "会社", "事例", "強み", "特徴", "提供", "内容", "料金", "費用", "拠点", "オフィス"]
         score = 0.0
-        
+
+        # 最重要技術キーワードの完全ヒット
+        if "デジタルエンジニアリング" in q_lower and "デジタルエンジニアリング" in t_lower:
+            score += 0.6
+
+        keywords = ["ux", "ui", "デザイン", "サービス", "事業", "概要", "会社", "事例", "強み", "特徴", "提供", "内容", "料金", "費用", "拠点", "オフィス"]
         for kw in keywords:
             if kw in q_lower and kw in t_lower:
-                score += 0.25
+                score += 0.2
 
         if ("サービス" in q_lower or "事業" in q_lower) and ("主な事業内容" in t_lower or "主なサービス" in t_lower or "概要" in t_lower):
-            score += 0.5
+            score += 0.4
 
         return min(1.0, score)
 
@@ -247,14 +251,14 @@ class RAGEngine:
         if clean_q in very_short_ambiguous or clean_q.endswith("詳") or clean_q.endswith("について"):
             return True
 
-        if top_score < 0.20:
+        if top_score < 0.35:
             return True
 
         return False
 
     def generate_rag_response(self, query: str, session_id: str = "default_session", top_k: int = 3) -> Dict[str, Any]:
         """
-        アバターとして親しみやすく対話が自然に続く会話型 RAG レスポンス生成（二重出力完全防止）
+        アバターとして親しみやすく対話が自然に続く会話型 RAG レスポンス生成（低スコア無関係な回答の強引断定防止）
         """
         clean_q = query.strip()
         if not clean_q:
@@ -265,8 +269,9 @@ class RAGEngine:
 
         history = self._get_or_clean_session(session_id)
 
+        # 検索用クエリの生成（直前文脈と最新質問の適切なバランス）
         expanded_query = clean_q
-        if history and len(clean_q) <= 10:
+        if history and len(clean_q) <= 10 and not any(k in clean_q for k in ["デジタルエンジニアリング", "会社概要", "サービス"]):
             last_user_q = next((h["content"] for h in reversed(history) if h["role"] == "user"), "")
             if last_user_q:
                 expanded_query = f"{last_user_q} {clean_q}"
@@ -297,10 +302,9 @@ class RAGEngine:
 現在、ユーザーとリアルタイムで対話・会話を行っています。以下のルールを厳格に守って回答を生成してください。
 
 【会話型アバターとしての最重要回答ルール】
-1. 同じ意味の文や概要説明を2回重複して繰り返さないでください。1つの自然にまとまった回答文として出力してください。
-2. 絶対に「ご質問の『〇〇』についてお答えいたします」といった、データベースの質問タイトルを勝手に決めつけて断定する固定文を使わないでください。
-3. ユーザーの質問に対して、まずは「〜ですね！」「〜についてご紹介しますね！」と自然な相槌（あいづち）や共感から会話を始めてください。
-4. ナレッジの情報をそのまま箇条書きや固い文章で読み上げるのではなく、アバターの親しみやすい口語体で答えてください。
+1. ナレッジの適合度スコアが低い場合や、ぴったり一致する情報がない場合は、無関係な特定の解決策（例: 個別の3Dアセット監視など）を勝手に決めつけて断定回答しないでください。
+2. ユーザーの質問に対して、まずは「〜ですね！」「〜についてご紹介しますね！」と自然な相槌（あいづち）や共感から会話を始めてください。
+3. ナレッジの情報をわかりやすい親しみやすい口語体で説明し、最後に「具体的にどの技術や事例についてお話ししましょうか？」と自然に会話を促してください。
 
 【過去の会話履歴】
 {history_str}
@@ -325,24 +329,17 @@ class RAGEngine:
             except Exception as e:
                 logger.error(f"Gemini generation error: {e}")
 
-        # フォールバック対話生成 (二重重複を完全除去したスマート構造)
+        # フォールバック対話生成
         if is_greeting:
             generated_text = (
                 "こんにちは！GlobalLogic Japan の AIアバターアシスタントです！😊\n"
                 "弊社のデジタルエンジニアリングや UI/UX デザイン、AI活用事例などについて何でもお聞きくださいね。"
                 "本日はどのようなことについてお話ししましょうか？"
             )
-        elif is_ambiguous and not search_results:
-            generated_text = (
-                f"「{clean_q}」についてですね！具体的にどのような点をお知りになりたいでしょうか？\n\n"
-                "例えば、会社概要や全体のサービス内容、業界別の導入事例、費用感や開発体制などについてお話しできますよ。"
-                "気になるキーワードがあれば、ぜひ気軽にお知らせくださいね！"
-            )
-        elif search_results:
+        elif top_score >= 0.35 and search_results:
             top = search_results[0]
             answer_body = top['answer'].strip()
             
-            # 手動概要とナレッジ本文の二重結合を廃止し、ナレッジ本文自体を主軸として対話整形
             if "サービス" in clean_q or "事業" in clean_q or "内容" in clean_q:
                 generated_text = (
                     "弊社のサービス内容についてご紹介しますね！\n\n"
@@ -356,11 +353,19 @@ class RAGEngine:
                     "こちらについて、さらに気になる点や深掘りしたい部分はございますか？"
                 )
         else:
-            generated_text = (
-                f"「{clean_q}」についてのお問い合わせですね。\n"
-                "申し訳ありません、該当する詳しい情報がすぐに見つからなかったのですが、"
-                "会社概要、サービス一覧、導入事例など、どのような点についてお知りになりたいか教えていただけますか？"
-            )
+            # 低スコア（適合ナレッジなし・不確定）時の親切な会話型回答
+            if "デジタルエンジニアリング" in clean_q:
+                generated_text = (
+                    "デジタルエンジニアリングについてですね！😊\n\n"
+                    "GlobalLogic では、デザイン思考（UI/UX）と最先端のソフトウェア開発、クラウド、データ＆AI活用を統合し、次世代のインテリジェントな製品やサービスを創出する技術支援を提供しております。\n\n"
+                    "具体的なUI/UXデザイン、クラウド開発、AI（VelocityAI）、業界別の導入事例など、どのような側面について詳しくお話しいたしましょうか？"
+                )
+            else:
+                generated_text = (
+                    f"「{clean_q}」についてですね！具体的にどのような点をお知りになりたいでしょうか？\n\n"
+                    "例えば、会社概要や全体のサービス内容、業界別の導入事例、費用感や開発体制などについてお話しできますよ。"
+                    "気になるキーワードがあれば、ぜひ気軽にお知らせくださいね！"
+                )
 
         history.append({"role": "user", "content": clean_q})
         history.append({"role": "assistant", "content": generated_text})
