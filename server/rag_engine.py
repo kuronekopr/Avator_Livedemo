@@ -198,13 +198,15 @@ class RAGEngine:
         
         score = 0.0
 
-        if ("事例" in q_lower or "実績" in q_lower or "ソリューション" in q_lower) and ("事例" in t_lower or "実績" in t_lower or "ソリューション" in t_lower or "導入" in t_lower or "ソリューション" in target_text):
+        if "デジタルエンジニアリング" in q_lower and "デジタルエンジニアリング" in t_lower:
             score += 0.5
+            if "とは" in q_lower and ("とは" in t_lower or "どのようなサービス" in t_lower or "技術支援" in t_lower):
+                score += 0.3
 
-        if ("体制" in q_lower or "提供" in q_lower or "契約" in q_lower) and ("体制" in t_lower or "契約" in t_lower or "チーム" in t_lower or "ラボ" in t_lower or "デリバリー" in t_lower):
+        if ("事例" in q_lower or "実績" in q_lower or "ソリューション" in q_lower) and ("事例" in t_lower or "実績" in t_lower or "ソリューション" in t_lower or "導入" in t_lower):
             score += 0.4
 
-        if "デジタルエンジニアリング" in q_lower and "デジタルエンジニアリング" in t_lower:
+        if ("体制" in q_lower or "提供" in q_lower or "契約" in q_lower) and ("体制" in t_lower or "契約" in t_lower or "チーム" in t_lower or "ラボ" in t_lower or "デリバリー" in t_lower):
             score += 0.4
 
         keywords = ["ux", "ui", "デザイン", "サービス", "事業", "概要", "会社", "強み", "特徴", "提供", "内容", "料金", "費用", "拠点", "オフィス"]
@@ -253,7 +255,7 @@ class RAGEngine:
     def is_ambiguous_query(self, query: str, top_score: float) -> bool:
         clean_q = query.strip().lower()
         
-        clear_topics = ["事例", "実績", "体制", "方法", "どこ", "いつ", "費用", "料金", "サービス", "契約", "デジタルエンジニアリング", "特徴", "強み"]
+        clear_topics = ["事例", "実績", "体制", "方法", "どこ", "いつ", "費用", "料金", "サービス", "契約", "デジタルエンジニアリング", "特徴", "強み", "とは"]
         if any(t in clean_q for t in clear_topics):
             return False
 
@@ -268,7 +270,7 @@ class RAGEngine:
 
     def generate_rag_response(self, query: str, session_id: str = "default_session", top_k: int = 4) -> Dict[str, Any]:
         """
-        文頭決めつけ全廃 ＆ 文末枕詞を初回限定化した会話型 RAG レスポンス生成
+        オウム返しを完全防止し、独立クエリと文脈依存クエリを正確に判別する RAG 応答生成
         """
         clean_q = query.strip()
         if not clean_q:
@@ -280,16 +282,24 @@ class RAGEngine:
         history = self._get_or_clean_session(session_id)
         is_first_turn = (len(history) == 0)
 
-        # 検索用クエリのスマート文脈合成
+        # 検索用クエリの精密文脈判定（文脈依存キーが存在する場合のみ結合）
         expanded_query = clean_q
         if history:
             last_user_q = next((h["content"] for h in reversed(history) if h["role"] == "user"), "")
-            context_dependent_keywords = ["事例", "実績", "体制", "費用", "料金", "特徴", "強み", "具体的には", "例えば", "どんなもの", "それ", "その"]
+            
+            # 主語が欠けている文脈依存キーワード（それ、その、具体的には、事例は、体制は、費用は）
+            context_dependent_keywords = ["事例", "実績", "体制", "費用", "料金", "特徴", "強み", "具体的には", "例えば", "どんなもの", "それ", "その", "どのような形態"]
+            
+            # 「〜とは」「〜について教えて」など独立したトピック質問の場合はガッチャンコ結合せず単体で検索
+            is_independent = "とは" in clean_q or "について教えて" in clean_q or "親会社" in clean_q or "事業内容" in clean_q
             is_context_dependent = any(k in clean_q for k in context_dependent_keywords)
             
-            if last_user_q and (is_context_dependent or len(clean_q) <= 15):
+            if last_user_q and is_context_dependent and not is_independent:
                 expanded_query = f"{last_user_q} {clean_q}"
-                logger.info(f"[MultiTurnContext] Synthesized query: '{expanded_query}'")
+                logger.info(f"[MultiTurnContext] Synthesized context query: '{expanded_query}'")
+            else:
+                expanded_query = clean_q
+                logger.info(f"[MultiTurnContext] Independent query executed: '{clean_q}'")
 
         search_results = self.search_knowledge_base(query=expanded_query, top_k=top_k)
         top_score = search_results[0]["score"] if search_results else 0.0
@@ -305,11 +315,10 @@ class RAGEngine:
             for h in recent_history
         ]) if recent_history else "（これまでの会話はありません）"
 
-        # 文末枕詞ルールの設定（初回質問時のみ文末にクッションフレーズを許可）
         ending_rule = (
             "【初回質問時の特別ルール】会話の最後に1言だけ『気になる点があればお気軽にお知らせくださいね』等の短い丁寧な文末の添え言葉を付けて構いません。"
             if is_first_turn else
-            "【2回目以降の会話ルール】文末の『〜について、さらに気になる点や深掘りしたい部分はございますか？』等の余計な問いかけ・枕詞・クッション言葉は絶対に付けず、回答本文のみで簡潔・スムーズに終了してください！"
+            "【2回目以降の会話ルール】文末の『〜について、さらに気になる点や深掘りしたい部分はございますか？』等の余計な問いかけ・枕詞は絶対に付けず、回答本文のみで簡潔に終了してください！"
         )
 
         # Gemini LLM 生成処理
@@ -321,12 +330,13 @@ class RAGEngine:
                 ])
 
                 system_prompt = f"""あなたは GlobalLogic Japan の公式3D AIアバターアシスタントです。
-ユーザーとリアルタイムで会話を行っています。以下のルールを厳格に守って回答を作成してください。
+ユーザーとリアルタイムで会話を行っています。以下のルールを守り、プロフェッショナルかつ親しみやすい会話文を作成してください。
 
-【最重要出力ルール】
-1. 『お問い合わせいただいた内容についてお話ししますね！』『弊社のサービス内容についてご紹介しますね！』などの文頭の定型挨拶や決めつけ言葉は一切出力しないでください！直接、回答本文から開始してください。
-2. {ending_rule}
-3. 質問に対する回答本文をナレッジから正確に抽出し、口語体（アバター口調）で分かりやすく述べてください。
+【厳格ルール】
+1. 前回の自分の発言と全く同じ回答（オウム返し）を絶対にリピートしないでください！最新の質問に対する新しい情報を【参照ナレッジ】から答えてください。
+2. 『お問い合わせいただいた内容についてお話ししますね！』『弊社のサービス内容についてご紹介しますね！』などの文頭の定型挨拶や決めつけ言葉は一切出力しないでください！直接、回答本文から開始してください。
+3. {ending_rule}
+4. 口語体のアバター口調（「〜ですね！」「〜となっております」）でスムーズに答えてください。
 
 【過去の会話履歴】
 {history_str}
@@ -351,7 +361,7 @@ class RAGEngine:
             except Exception as e:
                 logger.error(f"Gemini generation error: {e}")
 
-        # フォールバック対話生成 (文頭定型フレーズ全廃 ＆ 文末枕詞の初回限定化)
+        # フォールバック対話生成
         first_turn_suffix = "\n\n気になる点やご質問があればお気軽にお知らせくださいね！" if is_first_turn else ""
 
         if is_greeting:
