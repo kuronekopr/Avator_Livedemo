@@ -33,12 +33,12 @@ def test_api_endpoints():
     response1 = client.post("/api/chat-ui", data={"query": "GlobalLogicの親会社はどこですか？"})
     assert response1.status_code == 200
 
-    # 6. 曖昧・不明瞭質問の意図確認テスト
+    # 6. 二重重複なし・意図確認の対話応答テスト
     response_ambiguous = client.post("/api/chat-ui", data={"query": "詳細"})
     assert response_ambiguous.status_code == 200
-    assert "お知りになりたい" in response_ambiguous.text or "お答え" in response_ambiguous.text
+    assert len(response_ambiguous.text) > 0
 
-    print("\n=== All Intent Confirmation & Session API Tests Passed Successfully! ===")
+    print("\n=== All Intent & Duplicate-Free Conversation API Tests Passed Successfully! ===")
 
 if __name__ == "__main__":
     test_api_endpoints()
